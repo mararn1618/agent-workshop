@@ -1,83 +1,138 @@
 # Agentic Workshop
 
-A self-contained Claude Code plugin for browser-based, slide-driven alignment workshops between humans and AI agents.
+Browser-based workshop tool for human-AI alignment. The agent prepares slides from your codebase, then you walk through them together in the browser - chatting, commenting on tiles, and iterating until you're aligned.
 
-The agent prepares a structured workshop asynchronously (reading your codebase, structuring findings into slides with diagrams and questions), then presents it interactively in the browser. You walk through slides together, chat, comment on tiles, and refine in real time until you reach alignment.
+Works with Claude Code, Copilot, Cursor, Windsurf, Codex, and anything else that can run shell commands.
 
-## Why
+## The idea
 
-Complex tasks need alignment before implementation. Text-only conversations lose structure, and walls of questions are overwhelming. Agentic Workshop solves this with a two-phase approach:
+When you're about to build something complex, you need alignment first. But text-only back-and-forth in the terminal doesn't scale, and async approaches (like dumping 15 questions into a GitHub issue) are overwhelming.
 
-1. **Prepare** (async) — the agent reads code, gathers context, and builds a slide deck with diagrams, decision points, and questions
-2. **Present** (interactive) — you and the agent walk through slides in the browser, chatting and refining until aligned
+This plugin splits the work into two phases:
 
-Slide-based format enforces one topic per screen. Comments on tiles let you give precise, contextual feedback. The agent responds live.
+1. **Prepare** - the agent reads your code, gathers context, and builds a slide deck with diagrams and questions. This happens async, takes a few minutes.
+2. **Present** - you open the browser, walk through slides one by one, leave comments, chat. The agent responds live and updates tiles based on your feedback.
 
-## Install
+One topic per screen. Diagrams where they help. Questions where they're contextually relevant, not front-loaded.
 
-Requires [Bun](https://bun.sh):
+## Prerequisites
+
+You need [Bun](https://bun.sh) to run the workshop server:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
 ```
 
-Copy or symlink this directory into your Claude Code plugins folder:
+## Install
+
+### Claude Code
+
+```
+/plugin marketplace add mararn1618/agent-workshop
+/plugin install agentic-workshop@agent-workshop
+```
+
+This gives you `/workshop-prepare` and `/workshop-start` as skills.
+
+### GitHub Copilot
 
 ```bash
-ln -s /path/to/agentic-workshop ~/.claude/plugins/agentic-workshop
+curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/install.sh | bash -s -- copilot
 ```
+
+Then add to `.github/copilot-instructions.md`:
+
+```
+@.github/agentic-workshop/skills/workshop-prepare/SKILL.md
+@.github/agentic-workshop/skills/workshop-start/SKILL.md
+```
+
+### Cursor
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/install.sh | bash -s -- cursor
+```
+
+### Windsurf
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/install.sh | bash -s -- windsurf
+```
+
+### Codex / OpenCode / Gemini CLI
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/install.sh | bash -s -- codex
+```
+
+Then add to `AGENTS.md`:
+
+```
+@agentic-workshop/skills/workshop-prepare/SKILL.md
+@agentic-workshop/skills/workshop-start/SKILL.md
+```
+
+### Any other agent
+
+The whole thing is a Bun server and two markdown skill files. If your agent can run `bun`, `curl`, and `open`, it can use this. Point your agent at the two SKILL.md files in `skills/` - they contain everything: API reference, YAML schema, the interactive loop protocol.
 
 ## Usage
 
-### 1. Prepare a workshop
+### 1. Prepare
 
 ```
-/workshop-prepare <topic, task description, or file references>
+/workshop-prepare <topic or context>
 ```
 
-The agent gathers context from your codebase, structures findings into slides with diagrams and questions, and writes a `.workshop.yaml` file to `docs/workshops/`.
+The agent explores your codebase and writes a `.workshop.yaml` to `docs/workshops/`.
 
-### 2. Start the interactive session
+### 2. Present
 
 ```
 /workshop-start
 ```
 
-This starts the server on `http://127.0.0.1:7892`, loads the workshop, and opens your browser. The agent enters a live loop:
+Opens `http://127.0.0.1:7892` in your browser. From there:
 
-- **Chat** in the right panel — ask questions, give direction
-- **Comment** on any tile — precise, contextual feedback
-- **Apply** a comment — the agent updates that tile in real time
-- **Navigate** slides in the sidebar
-- **Finalize** when done — writes YAML state + curated summary to `docs/workshops/`
+- Chat with the agent in the right panel
+- Comment on any tile for contextual feedback
+- Hit "Apply" on a comment to have the agent update that tile
+- Click "Finalize" when done
 
-## Tile types
+Output goes to `docs/workshops/` - both the full YAML state and a curated summary.
 
-| Type | Use for |
-|------|---------|
+## Tiles
+
+Slides contain tiles. Each tile is one of:
+
+| Type | What it renders |
+|------|----------------|
 | Markdown | Text, tables, decision prompts |
-| Mermaid | Simple flowcharts, sequence diagrams |
-| Kroki | Rich diagrams (PlantUML, GraphViz, C4, D2, DBML) |
-| HTML | Custom layouts, dashboards |
-| SVG | Inline vector graphics |
+| Mermaid | Flowcharts, sequence diagrams |
+| Kroki | PlantUML, GraphViz, C4, D2, DBML |
+| HTML | Custom layouts |
+| SVG | Vector graphics |
 
-## Configuration
+Two half-width tiles sit side by side. Full-width tiles span the whole slide.
 
-| Env var | Default | Description |
-|---------|---------|-------------|
+## Config
+
+| Env var | Default | What it does |
+|---------|---------|--------------|
 | `WORKSHOP_PORT` | 7892 | Server port |
-| `WORKSHOP_HOST` | 127.0.0.1 | Server host |
+| `WORKSHOP_HOST` | 127.0.0.1 | Server bind address |
 
-## Project structure
+## Structure
 
 ```
 .claude-plugin/plugin.json    Plugin metadata
-server.ts                     Bun server (REST API + embedded UI)
-types.ts                      TypeScript type definitions
-skills/workshop-prepare/      Prepare skill (async context gathering)
-skills/workshop-start/        Start skill (interactive presentation loop)
-docs/ARCHITECTURE.md          Full architecture reference for developers
-docs/workshops/               Workshop output files (YAML + summaries)
+server.ts                     Bun server with embedded UI
+types.ts                      Data model (source of truth)
+skills/workshop-prepare/      Prepare skill
+skills/workshop-start/        Interactive presentation skill
+docs/ARCHITECTURE.md          Architecture docs for contributors
+docs/workshops/               Output directory
+install.sh                    Installer for non-Claude-Code harnesses
 ```
 
 ## License

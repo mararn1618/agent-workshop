@@ -10,7 +10,6 @@ export type TileType = "markdown" | "mermaid" | "kroki" | "html" | "svg";
 export type CommentStatus = "pending" | "applied" | "removed";
 
 export type InboxEventType =
-  | "comment-added"
   | "comment-applied"
   | "chat-message"
   | "finalize-requested";

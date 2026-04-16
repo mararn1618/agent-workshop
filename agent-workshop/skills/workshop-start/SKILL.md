@@ -24,17 +24,22 @@ Locate the `.workshop.yaml` file to load:
 
 Store the absolute path in `WORKSHOP_FILE` for later steps.
 
-## Step 1: Start the Server
+## Step 1: Start the Server (or reconnect to a running one)
 
-Check if the server is already running:
+Check if the server is already running AND whether a workshop is already loaded:
 
 ```bash
 curl -s http://127.0.0.1:7892/api/health
 ```
 
-If this returns `{"status":"ok",...}`, the server is running. Skip to opening the browser.
+Interpret the response:
 
-If not running, start it:
+- **No response / connection refused** → server is not running. Start it (see below).
+- **`slides: 0`** → server is running but empty. Proceed to Step 2 to load the YAML.
+- **`slides > 0` and `currentSourcePath` matches `$WORKSHOP_FILE`** → the server already has the target workshop loaded. This is a reconnect (e.g. after context compaction). **Skip Step 2 entirely** and jump to the browser + Step 4 polling. Brief the user: "Reconnecting to active workshop with N slides."
+- **`slides > 0` and `currentSourcePath` points to a *different* file** → a different workshop is live. Tell the user and ASK which to do: reconnect to the currently-loaded workshop, or load the new one (which will prompt the user to confirm in the browser via Step 2).
+
+If the server is not running, start it:
 
 ```bash
 bun run SKILL_BASE_DIR/../../server.ts &
@@ -81,13 +86,24 @@ curl -s -X POST http://127.0.0.1:7892/api/workshop/load \
   -d '{"path": "'"$WORKSHOP_FILE"'"}'
 ```
 
-Verify the load succeeded (response has `"ok": true`). Then fetch the workshop state to confirm slides are populated:
+Interpret the response:
+
+- **`{"ok": true, "restoredFromLive": false, ...}`** → fresh load from the source YAML. Standard flow.
+- **`{"ok": true, "restoredFromLive": true, ...}`** → the server found a `.workshop.live.yaml` sidecar file matching this workshop's ID and restored the full in-progress state (comments, chat history, unconsumed inbox events). Brief the user: "Resumed workshop with prior state intact." Then proceed to Step 4 — skip sending an opening chat message, since there is already chat history.
+- **HTTP 409 with `{"ok": false, "pending": true, "summary": {...}}`** → a *different* workshop is already loaded. The server has now emitted a pending-load event; the browser will show a modal asking the user to accept (discard current, load new) or decline (keep current). **Wait for the user to decide via the browser** — poll `/api/health` until `hasPendingLoad` is false, then check `/api/workshop` to see which workshop is loaded. Do NOT retry the load call.
+- **Other errors** → report the error and stop.
+
+Then fetch the workshop state to confirm slides are populated:
 
 ```bash
 curl -s http://127.0.0.1:7892/api/workshop
 ```
 
 Tell the user how many slides were loaded and give a one-line description of the workshop topic.
+
+### State persistence
+
+The server writes a `<workshop>.workshop.live.yaml` sidecar file next to the source YAML on every mutation (debounced). This captures comments, chat messages, tile updates, and unconsumed inbox events. If the conversation is compacted and this skill restarts, the next `/api/workshop/load` call on the same source path will automatically restore the live state — the agent does not need to do anything special. On `/api/finalize`, the sidecar is deleted and the finalized YAML in `docs/workshops/` becomes the source of truth.
 
 ## Step 3: Push Slides (if needed)
 

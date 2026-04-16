@@ -1,27 +1,30 @@
 # Agentic Workshop
 
-A Claude Code plugin for browser-based, slide-driven alignment workshops. The agent prepares a structured workshop asynchronously, then presents it interactively in the browser — you chat, comment on tiles, and refine together in real time.
+A self-contained Claude Code plugin for browser-based, slide-driven alignment workshops between humans and AI agents.
+
+The agent prepares a structured workshop asynchronously (reading your codebase, structuring findings into slides with diagrams and questions), then presents it interactively in the browser. You walk through slides together, chat, comment on tiles, and refine in real time until you reach alignment.
 
 ## Why
 
-The standard `/discuss` flow works for small tasks but struggles with complex topics: no visuals, no diagrams, hard to track multiple threads. Async alternatives (GitHub issue comments) dump too many questions at once. Agentic Workshop separates **preparation** (slow, async — the agent reads code and structures findings) from **presentation** (fast, interactive — you walk through slides together).
+Complex tasks need alignment before implementation. Text-only conversations lose structure, and walls of questions are overwhelming. Agentic Workshop solves this with a two-phase approach:
+
+1. **Prepare** (async) — the agent reads code, gathers context, and builds a slide deck with diagrams, decision points, and questions
+2. **Present** (interactive) — you and the agent walk through slides in the browser, chatting and refining until aligned
+
+Slide-based format enforces one topic per screen. Comments on tiles let you give precise, contextual feedback. The agent responds live.
 
 ## Install
+
+Requires [Bun](https://bun.sh):
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
 
 Copy or symlink this directory into your Claude Code plugins folder:
 
 ```bash
-# Option A: Symlink
 ln -s /path/to/agentic-workshop ~/.claude/plugins/agentic-workshop
-
-# Option B: Copy
-cp -r /path/to/agentic-workshop ~/.claude/plugins/agentic-workshop
-```
-
-The plugin requires [Bun](https://bun.sh) to run the server:
-
-```bash
-curl -fsSL https://bun.sh/install | bash
 ```
 
 ## Usage
@@ -29,7 +32,7 @@ curl -fsSL https://bun.sh/install | bash
 ### 1. Prepare a workshop
 
 ```
-/workshop-prepare <topic or context>
+/workshop-prepare <topic, task description, or file references>
 ```
 
 The agent gathers context from your codebase, structures findings into slides with diagrams and questions, and writes a `.workshop.yaml` file to `docs/workshops/`.
@@ -40,14 +43,13 @@ The agent gathers context from your codebase, structures findings into slides wi
 /workshop-start
 ```
 
-This starts the server on `http://127.0.0.1:7892`, loads the workshop, and opens your browser. The agent enters a live polling loop — you can:
+This starts the server on `http://127.0.0.1:7892`, loads the workshop, and opens your browser. The agent enters a live loop:
 
-- **Chat** with the agent in the right panel
-- **Comment** on any tile (add, apply, remove)
-- **Apply** a comment to trigger the agent to update that tile
+- **Chat** in the right panel — ask questions, give direction
+- **Comment** on any tile — precise, contextual feedback
+- **Apply** a comment — the agent updates that tile in real time
 - **Navigate** slides in the sidebar
-
-When you're done, click **Finalize Workshop** in the sidebar. The agent writes the final YAML and a curated summary to `docs/workshops/`.
+- **Finalize** when done — writes YAML state + curated summary to `docs/workshops/`
 
 ## Tile types
 

@@ -60,19 +60,19 @@ Existing reference: `claude-viz` at `/Users/work1618/.claude/plugins/marketplace
 ## Tasks
 *(tasks with the same `group` run in parallel; groups run in order A -> B -> C -> D)*
 
-- [ ] **T1: Define TypeScript type definitions**
+- [x] **T1: Define TypeScript type definitions**
   - **Group:** A
   - **Files:** `types.ts`
   - **Done when:** types compile with `bun build types.ts` and match the agreed schema — Workshop with slides[], each slide with tiles[], each tile with comments[], plus ChatMessage[], InboxEvent, and all status enums
   - Define all data model interfaces: `Workshop` (id, title, description, status, created, slides, chat), `Slide` (id, title, order, tiles), `Tile` (id, type, title, content, size, comments, krokiDiagramType, krokiOutputFormat), `Comment` (id, author, content, status, createdAt, appliedAt), `ChatMessage` (id, author, content, createdAt), `InboxEvent` (id, type, payload, createdAt, consumed, consumedAt). Export all types. Include literal union types for WorkshopStatus (`"preparing" | "ready" | "active" | "finalized"`), TileType (`"markdown" | "mermaid" | "kroki" | "html" | "svg"`), CommentStatus (`"pending" | "applied" | "removed"`), InboxEventType (comment-applied, chat-message, etc.). These types are the single source of truth — the server imports them directly.
 
-- [ ] **T2: Create plugin skeleton and directory structure**
+- [x] **T2: Create plugin skeleton and directory structure**
   - **Group:** A
   - **Files:** `.claude-plugin/plugin.json`, `skills/workshop-prepare/SKILL.md` (placeholder), `skills/workshop-start/SKILL.md` (placeholder)
   - **Done when:** `plugin.json` is valid JSON following the claude-viz pattern, skill directories exist with placeholder files
   - Create `.claude-plugin/plugin.json` with name `"agentic-workshop"`, description, version `"0.1.0"`, author. Create `skills/workshop-prepare/` and `skills/workshop-start/` directories with minimal placeholder SKILL.md files (just frontmatter — full content is T4/T5). Reference claude-viz's plugin.json (`/Users/work1618/.claude/plugins/marketplaces/mararn1618-claude-marketplace/claude-viz/.claude-plugin/plugin.json`) for the exact format.
 
-- [ ] **T3: Build Bun server with REST API, embedded UI, and YAML I/O**
+- [x] **T3: Build Bun server with REST API, embedded UI, and YAML I/O**
   - **Group:** B
   - **Depends on:** T1
   - **Files:** `server.ts`
@@ -83,14 +83,14 @@ Existing reference: `claude-viz` at `/Users/work1618/.claude/plugins/marketplace
   - **YAML I/O:** Load workshop from a `.workshop.yaml` file path (parse YAML, populate in-memory state, broadcast to SSE). Finalize writes the full workshop state to a YAML file at the agent-specified path. Use a YAML library (e.g., `js-yaml` via `bun add js-yaml`) or Bun's built-in capabilities if available.
   - Default port 7892 (configurable via `WORKSHOP_PORT` env var) to avoid clashing with claude-viz on 7891.
 
-- [ ] **T4: Write `/workshop-prepare` skill**
+- [x] **T4: Write `/workshop-prepare` skill**
   - **Group:** C
   - **Depends on:** T3
   - **Files:** `skills/workshop-prepare/SKILL.md`
   - **Done when:** SKILL.md has valid frontmatter (description, `context: fork`, `allowed-tools` including `Bash(curl *)`, `Read`, `Grep`, `Glob`), complete agent instructions covering the full preparation workflow, and matches the claude-viz SKILL.md authoring pattern
   - Write the skill that teaches the agent how to prepare a workshop asynchronously. The agent's workflow: (1) read the user's input (task description, issue URL, or free-form context), (2) gather project context using Read/Grep/Glob, (3) structure findings into slides — one topic per slide, tiles within each slide for text/diagrams/questions, (4) serialize as YAML matching the TypeScript types, (5) write to `docs/workshops/YYYY-MM-DD-<slug>.workshop.yaml`. Include guidance on slide granularity ("one thought unit per slide"), tile type selection (when to use mermaid vs kroki vs markdown), and how to place question-tiles where they make contextual sense (not front-loaded). Reference the YAML file format and TypeScript types. The skill should NOT start the server or open the browser — that's `/workshop-start`.
 
-- [ ] **T5: Write `/workshop-start` skill**
+- [x] **T5: Write `/workshop-start` skill**
   - **Group:** C
   - **Depends on:** T3
   - **Files:** `skills/workshop-start/SKILL.md`
@@ -100,17 +100,23 @@ Existing reference: `claude-viz` at `/Users/work1618/.claude/plugins/marketplace
 ## Advisor Checks
 *(clean-context advisor verifies, in addition to acceptance criteria)*
 
-- [ ] All tasks marked complete
-- [ ] `bun run server.ts` starts without errors on port 7892
-- [ ] `curl POST /api/slides` creates a slide visible in the browser sidebar
-- [ ] `curl POST /api/chat` message appears in the browser chat panel
-- [ ] Adding a comment on a tile in the browser creates an inbox event retrievable via `curl GET /api/inbox?unconsumed=true`
-- [ ] Applying a comment triggers an inbox event with type `comment-applied`
-- [ ] `curl POST /api/finalize` writes a valid `.workshop.yaml` file to disk
-- [ ] Both SKILL.md files have valid frontmatter with `allowed-tools` including `Bash(curl *)`
-- [ ] No dependency on claude-viz, discuss-plan-implement, or any other plugin — fully self-contained
-- [ ] TypeScript types in `types.ts` are imported and used by `server.ts` (not duplicated)
-- [ ] Plugin structure matches claude-viz pattern: `.claude-plugin/plugin.json` + `server.ts` + `skills/` directories
+- [x] All tasks marked complete
+- [x] `bun run server.ts` starts without errors on port 7892
+- [x] `curl POST /api/slides` creates a slide visible in the browser sidebar
+- [x] `curl POST /api/chat` message appears in the browser chat panel
+- [x] Adding a comment on a tile in the browser creates an inbox event retrievable via `curl GET /api/inbox?unconsumed=true`
+- [x] Applying a comment triggers an inbox event with type `comment-applied`
+- [x] `curl POST /api/finalize` writes a valid `.workshop.yaml` file to disk
+- [x] Both SKILL.md files have valid frontmatter with `allowed-tools` including `Bash(curl *)`
+- [x] No dependency on claude-viz, discuss-plan-implement, or any other plugin — fully self-contained
+- [x] TypeScript types in `types.ts` are imported and used by `server.ts` (not duplicated)
+- [x] Plugin structure matches claude-viz pattern: `.claude-plugin/plugin.json` + `server.ts` + `skills/` directories
 
 ## Progress Log
 <!-- appended by /implement-plan -->
+- 2026-04-16T12:53Z — T1: Created types.ts with all interfaces (Workshop, Slide, Tile, Comment, ChatMessage, InboxEvent) and literal unions. Fixed size to "full"|"half", author to "user"|"agent", optional title/description.
+- 2026-04-16T12:53Z — T2: Created .claude-plugin/plugin.json and placeholder SKILL.md files in skills/workshop-prepare/ and skills/workshop-start/.
+- 2026-04-16T13:00Z — T3: Built server.ts (1753 lines) — full Bun server with all REST API endpoints, embedded three-panel UI, SSE, inline YAML serializer, finalize flow. Tested via curl.
+- 2026-04-16T13:03Z — T4: Wrote workshop-prepare SKILL.md — full preparation workflow with YAML schema, tile guidance, question-scattering discipline.
+- 2026-04-16T13:03Z — T5: Wrote workshop-start SKILL.md — full interactive loop with server startup, YAML loading, inbox polling, finalization, API reference table.
+- 2026-04-16T13:08Z — Advisor APPROVED (Round 2): Fixed missing `comment-added` InboxEventType in types.ts and corresponding inbox event creation in server.ts POST /api/tiles/:tileId/comments. All 10 advisor checks pass.

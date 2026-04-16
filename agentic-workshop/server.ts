@@ -899,6 +899,12 @@ const toastEl = document.getElementById('toast');
 let state = { workshop: null, inbox: [] };
 let activeSlideId = null;
 const cardZoomStates = new Map();
+const commentDrafts = new Map();
+
+window.updateCommentDraft = function(tileId, value) {
+  if (value) commentDrafts.set(tileId, value);
+  else commentDrafts.delete(tileId);
+};
 
 /* -- Theme toggle -- */
 window.toggleTheme = function() {
@@ -1150,6 +1156,17 @@ async function renderSlide(slide) {
 
   // (hiddenComments set persists across re-renders — declared globally)
 
+  // Capture focused comment textarea so we can restore it after the rebuild
+  let focusInfo = null;
+  const active = document.activeElement;
+  if (active && active.id && active.id.indexOf('comment-input-') === 0) {
+    focusInfo = {
+      tileId: active.id.slice('comment-input-'.length),
+      start: active.selectionStart,
+      end: active.selectionEnd,
+    };
+  }
+
   tileGridEl.innerHTML = '';
   if (slide.tiles.length === 0) {
     tileGridEl.innerHTML = '<div class="empty-state"><h2>No tiles yet</h2><p>Tiles will appear here as the agent adds content to this slide.</p></div>';
@@ -1195,6 +1212,15 @@ async function renderSlide(slide) {
     const el = document.getElementById('comments-body-' + tileId);
     if (el) el.classList.add('hidden');
   });
+
+  // Restore focus + caret on the comment textarea the user was typing in
+  if (focusInfo) {
+    const el = document.getElementById('comment-input-' + focusInfo.tileId);
+    if (el) {
+      el.focus();
+      try { el.setSelectionRange(focusInfo.start, focusInfo.end); } catch {}
+    }
+  }
 }
 
 function renderCommentsHtml(slideId, tile) {
@@ -1216,8 +1242,13 @@ function renderCommentsHtml(slideId, tile) {
       html += '</div>';
     }
   }
+  const draft = commentDrafts.get(tile.id) || '';
   html += '<div class="add-comment-row">'
-    + '<textarea id="comment-input-' + tile.id + '" placeholder="Add a comment... (Ctrl+Enter to submit)" rows="2" onkeydown="if(event.ctrlKey&&event.key===\\'Enter\\'){event.preventDefault();addComment(\\'' + slideId + '\\',\\'' + tile.id + '\\');}"></textarea>'
+    + '<textarea id="comment-input-' + tile.id + '" placeholder="Add a comment... (Ctrl+Enter to submit)" rows="2"'
+    + ' oninput="updateCommentDraft(\\'' + tile.id + '\\', this.value)"'
+    + ' onkeydown="if(event.ctrlKey&&event.key===\\'Enter\\'){event.preventDefault();addComment(\\'' + slideId + '\\',\\'' + tile.id + '\\');}">'
+    + escapeHtml(draft)
+    + '</textarea>'
     + '<button onclick="addComment(\\'' + slideId + '\\',\\'' + tile.id + '\\')">Add</button>'
     + '</div>';
   return html;
@@ -1328,6 +1359,7 @@ window.addComment = async function(slideId, tileId) {
   const content = input.value.trim();
   if (!content) return;
   input.value = '';
+  commentDrafts.delete(tileId);
   try {
     const res = await fetch('/api/tiles/' + tileId + '/comments', {
       method: 'POST',
@@ -1757,7 +1789,6 @@ const server = Bun.serve({
           createdAt: new Date().toISOString(),
         };
         tile.comments.push(comment);
-        addInboxEvent("comment-added", { tileId, commentId: comment.id, content: comment.content });
         broadcastState();
         return jsonResponse({ ok: true, id: comment.id });
       })();

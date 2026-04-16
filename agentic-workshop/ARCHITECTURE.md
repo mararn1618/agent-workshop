@@ -54,7 +54,7 @@ All types are defined in `types.ts` and imported by `server.ts`. Never duplicate
 | `WorkshopStatus` | `preparing`, `ready`, `active`, `finalized` |
 | `TileType` | `markdown`, `mermaid`, `kroki`, `html`, `svg` |
 | `CommentStatus` | `pending`, `applied`, `removed` |
-| `InboxEventType` | `comment-added`, `comment-applied`, `chat-message`, `finalize-requested` |
+| `InboxEventType` | `comment-applied`, `chat-message`, `finalize-requested` |
 
 ## Server (server.ts)
 
@@ -99,9 +99,10 @@ The server broadcasts a `workshop-update` event to all connected browsers whenev
 
 The inbox is a session-scoped, append-only event queue. Events are created automatically by the server when:
 - A user posts a chat message (`chat-message`)
-- A user adds a comment on a tile (`comment-added`)
 - A user applies a comment (`comment-applied`)
 - The finalize endpoint is called (`finalize-requested`)
+
+Adding a comment stores it in tile state (`pending`) but does NOT emit an inbox event — the agent only reacts once the user clicks Apply.
 
 Events are never deleted, only marked as consumed. The agent polls `GET /api/inbox?unconsumed=true` and processes events, then marks them consumed via `POST /api/inbox/:id/consume`.
 

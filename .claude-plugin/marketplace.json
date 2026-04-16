@@ -8,7 +8,7 @@
       "name": "agent-workshop",
       "source": "./agent-workshop",
       "description": "Browser-based, slide-driven alignment tool for human-AI workshops. Prepare structured slides from your codebase, then present interactively with chat, tile comments, and live updates.",
-      "version": "0.2.0"
+      "version": "0.3.0"
     }
   ]
 }

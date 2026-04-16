@@ -74,9 +74,11 @@ Single-file Bun server following the claude-viz pattern. Port 7892 (configurable
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /api/health | Health check: status, slide count, chat count |
+| GET | /api/health | Health check: status, slide count, chat count, current source path, pending-load flag |
 | GET | /api/workshop | Full workshop state |
-| POST | /api/workshop/load | Load workshop from a YAML file path on disk |
+| POST | /api/workshop/load | Load workshop from a YAML file path on disk (auto-restores from live sidecar; 409 if a different workshop is active) |
+| POST | /api/workshop/load/confirm | Apply a pending load (user clicked Accept in browser) |
+| POST | /api/workshop/load/cancel | Decline a pending load (user clicked Decline in browser) |
 | POST | /api/slides | Push a new slide |
 | PUT | /api/slides/:id | Update a slide |
 | DELETE | /api/slides/:id | Remove a slide |
@@ -112,6 +114,31 @@ The server includes a custom inline YAML serializer and deserializer — no exte
 
 - **Load**: `POST /api/workshop/load` reads a `.workshop.yaml` file from disk, parses it, and populates in-memory state.
 - **Finalize**: `POST /api/finalize` serializes the current workshop state to YAML and writes it to `docs/workshops/`.
+
+### Live-state persistence (compaction-safe)
+
+On every state mutation (tile update, comment add/apply, chat post, slide change, inbox event), the server debounces a write (300ms) of the full in-memory state — workshop, comments, chat, AND the inbox — to a sidecar file next to the source YAML:
+
+```
+docs/workshops/my-workshop.workshop.yaml         ← source (never modified during session)
+docs/workshops/my-workshop.workshop.live.yaml    ← live sidecar (overwritten on every change)
+```
+
+When `/api/workshop/load` is called, it checks for a live sidecar whose `id` matches the source YAML's `id`. If present, the server loads the sidecar instead — preserving all in-progress state. This makes the session resilient to agent context compaction: if the agent restarts and dutifully re-runs load, the live state is automatically restored (response includes `restoredFromLive: true`).
+
+On `/api/finalize`, the live sidecar is deleted — the finalized YAML in `docs/workshops/` is the source of truth from that point on, and a stale sidecar must not linger and resurrect post-finalize state on the next load.
+
+### Safe-load and pending-load confirmation
+
+`POST /api/workshop/load` refuses to silently overwrite an active workshop with a different one. If the currently-loaded workshop has a different `id` than the one being loaded:
+
+1. The server stashes the parsed new workshop in a `pendingLoad` slot and returns HTTP 409 with `{pending: true, summary: {...}}`.
+2. A `workshop-update` SSE event broadcasts the pending-load summary (current title + counts, requested title + counts).
+3. The browser displays a modal asking the user to accept or decline.
+4. The user accepts → `POST /api/workshop/load/confirm` applies the pending load.
+5. The user declines → `POST /api/workshop/load/cancel` clears the pending slot; the current workshop stays untouched.
+
+Agents can bypass the confirmation by passing `force: true` in the load body, but the default should always require user confirmation for a disruptive overwrite.
 
 ## Browser UI
 

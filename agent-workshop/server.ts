@@ -34,6 +34,17 @@ let workshop: Workshop = {
 const inbox: InboxEvent[] = [];
 const sseClients = new Set<ReadableStreamDefaultController>();
 
+let currentSourcePath: string | null = null;
+
+interface PendingLoad {
+  sourcePath: string;
+  parsedData: Record<string, unknown>;
+  requestedAt: string;
+}
+let pendingLoad: PendingLoad | null = null;
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
@@ -52,8 +63,33 @@ function broadcast(event: string, data: unknown) {
   }
 }
 
+function pendingLoadSummary() {
+  if (!pendingLoad) return null;
+  const parsed = pendingLoad.parsedData;
+  const commentCount = workshop.slides.reduce(
+    (sum, s) => sum + s.tiles.reduce((ss, t) => ss + t.comments.length, 0),
+    0,
+  );
+  return {
+    requested: {
+      id: parsed.id as string,
+      title: (parsed.title as string) || "Untitled",
+      slideCount: ((parsed.slides as unknown[]) || []).length,
+    },
+    current: {
+      id: workshop.id,
+      title: workshop.title,
+      commentCount,
+      chatCount: workshop.chat.length,
+      slideCount: workshop.slides.length,
+    },
+    requestedAt: pendingLoad.requestedAt,
+  };
+}
+
 function broadcastState() {
-  broadcast("workshop-update", { workshop, inbox });
+  broadcast("workshop-update", { workshop, inbox, pendingLoad: pendingLoadSummary() });
+  schedulePersist();
 }
 
 function addInboxEvent(type: InboxEventType, payload: Record<string, unknown>): InboxEvent {
@@ -66,6 +102,129 @@ function addInboxEvent(type: InboxEventType, payload: Record<string, unknown>): 
   };
   inbox.push(evt);
   return evt;
+}
+
+function livePathFor(sourcePath: string): string {
+  const suffix = ".workshop.yaml";
+  if (sourcePath.endsWith(suffix)) {
+    return sourcePath.slice(0, -suffix.length) + ".workshop.live.yaml";
+  }
+  return sourcePath + ".live";
+}
+
+function schedulePersist() {
+  if (!currentSourcePath) return;
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    void persistLive();
+  }, 300);
+}
+
+async function persistLive() {
+  if (!currentSourcePath) return;
+  const livePath = livePathFor(currentSourcePath);
+  try {
+    await Bun.write(livePath, serializeLiveState());
+  } catch (err) {
+    console.error("persistLive failed:", err);
+  }
+}
+
+function serializeLiveState(): string {
+  return yamlSerialize({
+    id: workshop.id,
+    title: workshop.title,
+    description: workshop.description,
+    status: workshop.status,
+    created: workshop.created,
+    slides: workshop.slides.map((s) => ({
+      id: s.id,
+      title: s.title,
+      order: s.order,
+      tiles: s.tiles.map((t) => ({
+        id: t.id,
+        type: t.type,
+        title: t.title,
+        content: t.content,
+        size: t.size,
+        comments: t.comments.map((c) => ({
+          id: c.id,
+          author: c.author,
+          content: c.content,
+          status: c.status,
+          createdAt: c.createdAt,
+          appliedAt: c.appliedAt,
+        })),
+        krokiDiagramType: t.krokiDiagramType,
+        krokiOutputFormat: t.krokiOutputFormat,
+      })),
+    })),
+    chat: workshop.chat.map((m) => ({
+      id: m.id,
+      author: m.author,
+      content: m.content,
+      createdAt: m.createdAt,
+    })),
+    inbox: inbox.map((e) => ({
+      id: e.id,
+      type: e.type,
+      payload: e.payload,
+      createdAt: e.createdAt,
+      consumed: e.consumed,
+      consumedAt: e.consumedAt,
+    })),
+  });
+}
+
+function applyWorkshopFromParsed(parsed: Record<string, unknown>) {
+  workshop.id = (parsed.id as string) || generateId();
+  workshop.title = (parsed.title as string) || "Untitled Workshop";
+  workshop.description = (parsed.description as string) || undefined;
+  workshop.status = (parsed.status as WorkshopStatus) || "preparing";
+  workshop.created = (parsed.created as string) || new Date().toISOString();
+  workshop.slides = ((parsed.slides as unknown[]) || []).map((s: any, idx: number) => ({
+    id: s.id || generateId(),
+    title: s.title || `Slide ${idx + 1}`,
+    order: s.order ?? idx + 1,
+    tiles: ((s.tiles as unknown[]) || []).map((t: any) => ({
+      id: t.id || generateId(),
+      type: t.type || "markdown",
+      title: t.title || undefined,
+      content: t.content || "",
+      size: t.size || "full",
+      comments: ((t.comments as unknown[]) || []).map((c: any) => ({
+        id: c.id || generateId(),
+        author: c.author || "agent",
+        content: c.content || "",
+        status: c.status || "pending",
+        createdAt: c.createdAt || new Date().toISOString(),
+        appliedAt: c.appliedAt || undefined,
+      })),
+      krokiDiagramType: t.krokiDiagramType || undefined,
+      krokiOutputFormat: t.krokiOutputFormat || undefined,
+    })),
+  }));
+  workshop.chat = ((parsed.chat as unknown[]) || []).map((m: any) => ({
+    id: m.id || generateId(),
+    author: m.author || "agent",
+    content: m.content || "",
+    createdAt: m.createdAt || new Date().toISOString(),
+  }));
+  inbox.length = 0;
+  const inboxData = parsed.inbox;
+  if (Array.isArray(inboxData)) {
+    for (const e of inboxData as any[]) {
+      inbox.push({
+        id: e.id || generateId(),
+        type: (e.type as InboxEventType) || "chat-message",
+        payload: (e.payload as Record<string, unknown>) || {},
+        createdAt: e.createdAt || new Date().toISOString(),
+        consumed: Boolean(e.consumed),
+        consumedAt: e.consumedAt || undefined,
+      });
+    }
+  }
 }
 
 // --- Simple YAML serializer/deserializer ---
@@ -875,6 +1034,17 @@ const HTML_PAGE = `<!DOCTYPE html>
   </div>
 </div>
 
+<div class="modal-overlay" id="pending-load-modal">
+  <div class="modal-box">
+    <h3>Load a different workshop?</h3>
+    <div id="pending-load-body" style="color: var(--text-muted); margin-bottom: 16px; font-size: 13px; line-height: 1.6;"></div>
+    <div class="modal-btns">
+      <button class="modal-btn-cancel" onclick="declinePendingLoad()">Keep current</button>
+      <button class="modal-btn-confirm" onclick="acceptPendingLoad()">Discard &amp; load new</button>
+    </div>
+  </div>
+</div>
+
 <script type="module">
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
 import { marked } from 'https://cdn.jsdelivr.net/npm/marked@15/lib/marked.esm.js';
@@ -896,7 +1066,7 @@ const fsViewportEl = document.getElementById('fs-viewport');
 const fsInnerEl = document.getElementById('fs-inner');
 const toastEl = document.getElementById('toast');
 
-let state = { workshop: null, inbox: [] };
+let state = { workshop: null, inbox: [], pendingLoad: null };
 let activeSlideId = null;
 const cardZoomStates = new Map();
 const commentDrafts = new Map();
@@ -1105,6 +1275,8 @@ async function hydrate() {
 
 /* -- Render -- */
 function render() {
+  renderPendingLoadModal();
+
   const ws = state.workshop;
   if (!ws) return;
 
@@ -1483,6 +1655,60 @@ window.doFinalize = async function() {
   }
 };
 
+/* -- Pending-load modal -- */
+function renderPendingLoadModal() {
+  const modal = document.getElementById('pending-load-modal');
+  const body = document.getElementById('pending-load-body');
+  const pl = state.pendingLoad;
+  if (pl) {
+    const c = pl.current, r = pl.requested;
+    body.innerHTML =
+      'The agent has requested to load a new workshop into this session.<br><br>' +
+      '<div style="padding:10px;background:var(--bg-card);border-radius:6px;margin-bottom:10px;">' +
+        '<div style="color:var(--text);font-weight:600;margin-bottom:4px;">Currently loaded</div>' +
+        '<div>' + escapeHtml(c.title) + '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim);margin-top:4px;">' +
+          c.slideCount + ' slide' + (c.slideCount !== 1 ? 's' : '') + ' &middot; ' +
+          c.commentCount + ' comment' + (c.commentCount !== 1 ? 's' : '') + ' &middot; ' +
+          c.chatCount + ' chat message' + (c.chatCount !== 1 ? 's' : '') +
+        '</div>' +
+      '</div>' +
+      '<div style="padding:10px;background:var(--bg-card);border-radius:6px;margin-bottom:10px;border:1px solid var(--accent);">' +
+        '<div style="color:var(--accent);font-weight:600;margin-bottom:4px;">Requested</div>' +
+        '<div>' + escapeHtml(r.title) + '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim);margin-top:4px;">' +
+          r.slideCount + ' slide' + (r.slideCount !== 1 ? 's' : '') +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--orange);">Accepting will discard the current workshop from this session. The YAML file on disk is not deleted.</div>';
+    modal.classList.add('active');
+  } else {
+    modal.classList.remove('active');
+  }
+}
+
+window.acceptPendingLoad = async function() {
+  try {
+    const res = await fetch('/api/workshop/load/confirm', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) showToast('Loaded new workshop');
+    else showToast('Load confirm failed: ' + (data.error || 'unknown'));
+  } catch {
+    showToast('Load confirm request failed');
+  }
+};
+
+window.declinePendingLoad = async function() {
+  try {
+    const res = await fetch('/api/workshop/load/cancel', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) showToast('Kept current workshop');
+    else showToast('Load cancel failed: ' + (data.error || 'unknown'));
+  } catch {
+    showToast('Load cancel request failed');
+  }
+};
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeFullscreen();
@@ -1542,9 +1768,12 @@ const server = Bun.serve({
       return jsonResponse({
         status: "ok",
         workshopId: workshop.id,
+        title: workshop.title,
         slides: workshop.slides.length,
         chatMessages: workshop.chat.length,
         inboxEvents: inbox.length,
+        currentSourcePath,
+        hasPendingLoad: pendingLoad !== null,
       });
     }
 
@@ -1553,10 +1782,12 @@ const server = Bun.serve({
       return jsonResponse(workshop);
     }
 
-    // POST workshop/load — Load from YAML file
+    // POST workshop/load — Load from YAML file.
+    // Auto-restores from .live.yaml if present and workshop ID matches (survives agent compaction).
+    // If a different workshop is currently loaded, returns 409 with a pending-load flag until the user confirms.
     if (url.pathname === "/api/workshop/load" && req.method === "POST") {
       return (async () => {
-        let body: { path: string };
+        let body: { path: string; force?: boolean };
         try {
           body = await req.json();
         } catch {
@@ -1566,48 +1797,89 @@ const server = Bun.serve({
           return jsonResponse({ ok: false, error: "Missing 'path' field" }, 400);
         }
         try {
-          const file = Bun.file(body.path);
-          const text = await file.text();
-          const parsed = yamlParse(text) as Record<string, unknown>;
-          workshop.id = (parsed.id as string) || generateId();
-          workshop.title = (parsed.title as string) || "Untitled Workshop";
-          workshop.description = (parsed.description as string) || undefined;
-          workshop.status = (parsed.status as WorkshopStatus) || "preparing";
-          workshop.created = (parsed.created as string) || new Date().toISOString();
-          workshop.slides = ((parsed.slides as unknown[]) || []).map((s: any, idx: number) => ({
-            id: s.id || generateId(),
-            title: s.title || `Slide ${idx + 1}`,
-            order: s.order ?? idx + 1,
-            tiles: ((s.tiles as unknown[]) || []).map((t: any) => ({
-              id: t.id || generateId(),
-              type: t.type || "markdown",
-              title: t.title || undefined,
-              content: t.content || "",
-              size: t.size || "full",
-              comments: ((t.comments as unknown[]) || []).map((c: any) => ({
-                id: c.id || generateId(),
-                author: c.author || "agent",
-                content: c.content || "",
-                status: c.status || "pending",
-                createdAt: c.createdAt || new Date().toISOString(),
-                appliedAt: c.appliedAt || undefined,
-              })),
-              krokiDiagramType: t.krokiDiagramType || undefined,
-              krokiOutputFormat: t.krokiOutputFormat || undefined,
-            })),
-          }));
-          workshop.chat = ((parsed.chat as unknown[]) || []).map((m: any) => ({
-            id: m.id || generateId(),
-            author: m.author || "agent",
-            content: m.content || "",
-            createdAt: m.createdAt || new Date().toISOString(),
-          }));
+          const sourcePath = body.path.startsWith("/")
+            ? body.path
+            : `${process.cwd()}/${body.path}`;
+
+          const sourceText = await Bun.file(sourcePath).text();
+          const sourceParsed = yamlParse(sourceText) as Record<string, unknown>;
+          const sourceId = (sourceParsed.id as string) || "";
+
+          let toLoad: Record<string, unknown> = sourceParsed;
+          let restoredFromLive = false;
+
+          const livePath = livePathFor(sourcePath);
+          const liveFile = Bun.file(livePath);
+          if (await liveFile.exists()) {
+            try {
+              const liveText = await liveFile.text();
+              const liveParsed = yamlParse(liveText) as Record<string, unknown>;
+              if ((liveParsed.id as string) === sourceId) {
+                toLoad = liveParsed;
+                restoredFromLive = true;
+              }
+            } catch (err) {
+              console.error("Failed to read live state, falling back to source:", err);
+            }
+          }
+
+          const hasActiveWorkshop =
+            currentSourcePath !== null ||
+            workshop.slides.length > 0 ||
+            workshop.chat.length > 0;
+          const loadingDifferentWorkshop =
+            hasActiveWorkshop && workshop.id !== sourceId;
+
+          if (loadingDifferentWorkshop && !body.force) {
+            pendingLoad = {
+              sourcePath,
+              parsedData: toLoad,
+              requestedAt: new Date().toISOString(),
+            };
+            broadcastState();
+            return jsonResponse(
+              {
+                ok: false,
+                pending: true,
+                reason:
+                  "A different workshop is currently loaded. Waiting for browser confirmation.",
+                summary: pendingLoadSummary(),
+              },
+              409,
+            );
+          }
+
+          applyWorkshopFromParsed(toLoad);
+          currentSourcePath = sourcePath;
+          pendingLoad = null;
           broadcastState();
-          return jsonResponse({ ok: true, id: workshop.id });
+          return jsonResponse({ ok: true, id: workshop.id, restoredFromLive });
         } catch (err: any) {
           return jsonResponse({ ok: false, error: err.message }, 500);
         }
       })();
+    }
+
+    // POST workshop/load/confirm — Accept a pending load (user clicked Accept in browser)
+    if (url.pathname === "/api/workshop/load/confirm" && req.method === "POST") {
+      if (!pendingLoad) {
+        return jsonResponse({ ok: false, error: "No pending load" }, 400);
+      }
+      applyWorkshopFromParsed(pendingLoad.parsedData);
+      currentSourcePath = pendingLoad.sourcePath;
+      pendingLoad = null;
+      broadcastState();
+      return jsonResponse({ ok: true, id: workshop.id });
+    }
+
+    // POST workshop/load/cancel — Decline a pending load (user clicked Decline in browser)
+    if (url.pathname === "/api/workshop/load/cancel" && req.method === "POST") {
+      if (!pendingLoad) {
+        return jsonResponse({ ok: false, error: "No pending load" }, 400);
+      }
+      pendingLoad = null;
+      broadcastState();
+      return jsonResponse({ ok: true });
     }
 
     // POST /api/slides — Push new slide
@@ -1909,6 +2181,24 @@ const server = Bun.serve({
 
           await Bun.write(filePath, yamlContent);
           workshop.status = "finalized";
+
+          // Remove the live sidecar — the finalized YAML is the source of truth now.
+          // Clear currentSourcePath and cancel any pending persist so the deletion isn't undone
+          // by a trailing debounced write from earlier mutations.
+          if (persistTimer) {
+            clearTimeout(persistTimer);
+            persistTimer = null;
+          }
+          if (currentSourcePath) {
+            const livePath = livePathFor(currentSourcePath);
+            try {
+              const { unlinkSync, existsSync } = await import("fs");
+              if (existsSync(livePath)) unlinkSync(livePath);
+            } catch (err) {
+              console.error("Failed to remove live sidecar on finalize:", err);
+            }
+            currentSourcePath = null;
+          }
 
           // Auto-create inbox event
           addInboxEvent("finalize-requested", { path: filePath, slug });

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Agentic Workshop installer
+# Agent Workshop installer
 # Downloads and installs skill files for your agent harness.
 # Usage: curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/install.sh | bash -s -- <target>
 # Targets: copilot, cursor, windsurf, codex
 
-REPO="https://raw.githubusercontent.com/mararn1618/agent-workshop/main/agentic-workshop"
+REPO="https://raw.githubusercontent.com/mararn1618/agent-workshop/main/agent-workshop"
 TARGET="${1:-}"
 
 FILES=(
@@ -34,48 +34,48 @@ download_all() {
 
 case "$TARGET" in
   copilot)
-    DEST=".github/agentic-workshop"
+    DEST=".github/agent-workshop"
     download_all "$DEST"
     echo ""
     echo "Add to .github/copilot-instructions.md:"
-    echo "  @.github/agentic-workshop/skills/workshop-prepare/SKILL.md"
-    echo "  @.github/agentic-workshop/skills/workshop-start/SKILL.md"
+    echo "  @.github/agent-workshop/skills/workshop-prepare/SKILL.md"
+    echo "  @.github/agent-workshop/skills/workshop-start/SKILL.md"
     ;;
   cursor)
-    DEST=".cursor/agentic-workshop"
+    DEST=".cursor/agent-workshop"
     download_all "$DEST"
     echo ""
     echo "Add to .cursor/rules/ or reference in your Cursor settings."
     ;;
   windsurf)
-    DEST=".windsurf/agentic-workshop"
+    DEST=".windsurf/agent-workshop"
     download_all "$DEST"
     echo ""
     echo "Skills installed to $DEST/"
     ;;
   codex|opencode|gemini)
-    DEST="agentic-workshop"
+    DEST="agent-workshop"
     download_all "$DEST"
     echo ""
     echo "Add to AGENTS.md:"
-    echo "  @agentic-workshop/skills/workshop-prepare/SKILL.md"
-    echo "  @agentic-workshop/skills/workshop-start/SKILL.md"
+    echo "  @agent-workshop/skills/workshop-prepare/SKILL.md"
+    echo "  @agent-workshop/skills/workshop-start/SKILL.md"
     ;;
   "")
-    echo "Agentic Workshop installer"
+    echo "Agent Workshop installer"
     echo ""
     echo "Usage:"
     echo "  curl -fsSL $REPO/install.sh | bash -s -- <target>"
     echo ""
     echo "Targets:"
-    echo "  copilot   - GitHub Copilot (.github/agentic-workshop/)"
-    echo "  cursor    - Cursor (.cursor/agentic-workshop/)"
-    echo "  windsurf  - Windsurf (.windsurf/agentic-workshop/)"
-    echo "  codex     - Codex/OpenCode/Gemini (agentic-workshop/)"
+    echo "  copilot   - GitHub Copilot (.github/agent-workshop/)"
+    echo "  cursor    - Cursor (.cursor/agent-workshop/)"
+    echo "  windsurf  - Windsurf (.windsurf/agent-workshop/)"
+    echo "  codex     - Codex/OpenCode/Gemini (agent-workshop/)"
     echo ""
     echo "For Claude Code:"
     echo "  /plugin marketplace add mararn1618/agent-workshop"
-    echo "  /plugin install agentic-workshop@agent-workshop"
+    echo "  /plugin install agent-workshop@agent-workshop"
     exit 1
     ;;
   *)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Agentic Workshop — Browser-based slide-driven alignment tool.
+ * Agent Workshop — Browser-based slide-driven alignment tool.
  * Single-file Bun server, embedded HTML/CSS/JS, following the claude-viz pattern.
  */
 
@@ -389,7 +389,7 @@ const HTML_PAGE = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agentic Workshop</title>
+<title>Agent Workshop</title>
 <style>
   :root {
     --bg: #0d1117; --bg-card: #161b22; --bg-card-hover: #1c2333;
@@ -1933,5 +1933,5 @@ function findTileById(tileId: string): Tile | undefined {
   return undefined;
 }
 
-console.log(`Agentic Workshop server running at http://${HOST}:${PORT}`);
+console.log(`Agent Workshop server running at http://${HOST}:${PORT}`);
 console.log(`  http://127.0.0.1:${PORT}  (localhost)`);

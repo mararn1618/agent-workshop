@@ -1,4 +1,4 @@
-# Agentic Workshop
+# Agent Workshop
 
 Browser-based workshop tool for human-AI alignment. The agent prepares slides from your codebase, then you walk through them together in the browser - chatting, commenting on tiles, and iterating until you're aligned.
 
@@ -29,7 +29,7 @@ curl -fsSL https://bun.sh/install | bash
 
 ```
 /plugin marketplace add mararn1618/agent-workshop
-/plugin install agentic-workshop@agent-workshop
+/plugin install agent-workshop@agent-workshop
 ```
 
 This gives you `/workshop-prepare` and `/workshop-start` as skills.
@@ -43,8 +43,8 @@ curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/inst
 Then add to `.github/copilot-instructions.md`:
 
 ```
-@.github/agentic-workshop/skills/workshop-prepare/SKILL.md
-@.github/agentic-workshop/skills/workshop-start/SKILL.md
+@.github/agent-workshop/skills/workshop-prepare/SKILL.md
+@.github/agent-workshop/skills/workshop-start/SKILL.md
 ```
 
 ### Cursor
@@ -68,8 +68,8 @@ curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/inst
 Then add to `AGENTS.md`:
 
 ```
-@agentic-workshop/skills/workshop-prepare/SKILL.md
-@agentic-workshop/skills/workshop-start/SKILL.md
+@agent-workshop/skills/workshop-prepare/SKILL.md
+@agent-workshop/skills/workshop-start/SKILL.md
 ```
 
 ### Any other agent
@@ -127,7 +127,7 @@ Two half-width tiles sit side by side. Full-width tiles span the whole slide.
 ```
 .claude-plugin/marketplace.json       Marketplace metadata for Claude Code
 install.sh                            Installer for non-Claude-Code harnesses
-agentic-workshop/                     The plugin
+agent-workshop/                       The plugin
   .claude-plugin/plugin.json          Plugin metadata
   server.ts                           Bun server with embedded UI
   types.ts                            Data model (source of truth)

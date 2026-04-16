@@ -1,7 +1,7 @@
 {
-  "name": "agentic-workshop",
+  "name": "agent-workshop",
   "description": "Browser-based, slide-driven alignment tool for agentic workshops. Extends claude-viz to deliver structured workshop flows with prepare and start phases.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "author": {
     "name": "Markus Arndt"
   }

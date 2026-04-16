@@ -1,4 +1,4 @@
-# Agentic Workshop — Architecture
+# Agent Workshop — Architecture
 
 This document is intended for agents and developers picking up work on the plugin. It covers the full architecture, file layout, data flow, and extension points.
 

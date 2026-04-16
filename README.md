@@ -125,14 +125,15 @@ Two half-width tiles sit side by side. Full-width tiles span the whole slide.
 ## Structure
 
 ```
-.claude-plugin/plugin.json    Plugin metadata
-server.ts                     Bun server with embedded UI
-types.ts                      Data model (source of truth)
-skills/workshop-prepare/      Prepare skill
-skills/workshop-start/        Interactive presentation skill
-docs/ARCHITECTURE.md          Architecture docs for contributors
-docs/workshops/               Output directory
-install.sh                    Installer for non-Claude-Code harnesses
+.claude-plugin/marketplace.json       Marketplace metadata for Claude Code
+install.sh                            Installer for non-Claude-Code harnesses
+agentic-workshop/                     The plugin
+  .claude-plugin/plugin.json          Plugin metadata
+  server.ts                           Bun server with embedded UI
+  types.ts                            Data model (source of truth)
+  skills/workshop-prepare/            Prepare skill
+  skills/workshop-start/              Interactive presentation skill
+  ARCHITECTURE.md                     Architecture docs for contributors
 ```
 
 ## License

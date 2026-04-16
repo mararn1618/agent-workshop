@@ -6,7 +6,7 @@ set -euo pipefail
 # Usage: curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/install.sh | bash -s -- <target>
 # Targets: copilot, cursor, windsurf, codex
 
-REPO="https://raw.githubusercontent.com/mararn1618/agent-workshop/main"
+REPO="https://raw.githubusercontent.com/mararn1618/agent-workshop/main/agentic-workshop"
 TARGET="${1:-}"
 
 FILES=(

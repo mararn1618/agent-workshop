@@ -34,6 +34,12 @@ let workshop: Workshop = {
 const inbox: InboxEvent[] = [];
 const sseClients = new Set<ReadableStreamDefaultController>();
 
+interface InboxWaiter {
+  resolve: (events: InboxEvent[]) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+const inboxWaiters = new Set<InboxWaiter>();
+
 let currentSourcePath: string | null = null;
 
 interface PendingLoad {
@@ -101,7 +107,19 @@ function addInboxEvent(type: InboxEventType, payload: Record<string, unknown>): 
     consumed: false,
   };
   inbox.push(evt);
+  notifyInboxWaiters();
   return evt;
+}
+
+function notifyInboxWaiters() {
+  if (inboxWaiters.size === 0) return;
+  const unconsumed = inbox.filter((e) => !e.consumed);
+  const waiters = Array.from(inboxWaiters);
+  inboxWaiters.clear();
+  for (const w of waiters) {
+    clearTimeout(w.timer);
+    w.resolve(unconsumed);
+  }
 }
 
 function livePathFor(sourcePath: string): string {
@@ -2097,6 +2115,33 @@ const server = Bun.serve({
         }
         broadcastState();
         return jsonResponse({ ok: true, id: comment.id });
+      })();
+    }
+
+    // GET /api/inbox/wait — Long-poll for unconsumed events
+    if (url.pathname === "/api/inbox/wait" && req.method === "GET") {
+      const initial = inbox.filter((e) => !e.consumed);
+      if (initial.length > 0) return jsonResponse(initial);
+      const timeoutParam = url.searchParams.get("timeout");
+      const parsed = parseInt(timeoutParam || "30", 10);
+      const timeoutSec = Math.min(Math.max(Number.isFinite(parsed) ? parsed : 30, 1), 55);
+      return (async () => {
+        const events = await new Promise<InboxEvent[]>((resolve) => {
+          const waiter: InboxWaiter = {
+            resolve,
+            timer: setTimeout(() => {
+              inboxWaiters.delete(waiter);
+              resolve(inbox.filter((e) => !e.consumed));
+            }, timeoutSec * 1000),
+          };
+          inboxWaiters.add(waiter);
+          req.signal?.addEventListener("abort", () => {
+            clearTimeout(waiter.timer);
+            inboxWaiters.delete(waiter);
+            resolve([]);
+          });
+        });
+        return jsonResponse(events);
       })();
     }
 

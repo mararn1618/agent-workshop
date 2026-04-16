@@ -88,7 +88,8 @@ Single-file Bun server following the claude-viz pattern. Port 7892 (configurable
 | GET | /api/chat | Get chat history |
 | POST | /api/tiles/:tileId/comments | Add a comment to a tile |
 | PUT | /api/tiles/:tileId/comments/:commentId | Update comment (status, content) |
-| GET | /api/inbox | Poll inbox (query: `?unconsumed=true`) |
+| GET | /api/inbox | Poll inbox (query: `?unconsumed=true`) — returns immediately |
+| GET | /api/inbox/wait | Long-poll (query: `?timeout=30`, max 55) — blocks until an event arrives or timeout |
 | POST | /api/inbox/:id/consume | Mark an inbox event as consumed |
 | POST | /api/finalize | Write full workshop state to YAML on disk |
 | GET | /api/events | SSE stream for live browser updates |
@@ -107,6 +108,14 @@ The inbox is a session-scoped, append-only event queue. Events are created autom
 Adding a comment stores it in tile state (`pending`) but does NOT emit an inbox event — the agent only reacts once the user clicks Apply.
 
 Events are never deleted, only marked as consumed. The agent polls `GET /api/inbox?unconsumed=true` and processes events, then marks them consumed via `POST /api/inbox/:id/consume`.
+
+### Inbox long-polling
+
+`GET /api/inbox/wait?timeout=30` is the preferred polling mechanism for the agent. If unconsumed events exist, the endpoint returns them immediately. Otherwise the request is held open for up to `timeout` seconds (capped at 55) and resolves as soon as `addInboxEvent` pushes a new event — at which point all pending waiters fire at once with the current unconsumed set.
+
+Internally the server keeps a `Set<InboxWaiter>` of pending resolvers. Each waiter owns a timer (for the timeout fallback) and an `abort` listener on the request signal (for client-initiated disconnects). On a wake, the set is drained atomically so a single event cannot fire the same waiter twice.
+
+This reduces context bloat during a workshop session: instead of the agent issuing a `curl` every three seconds and accumulating tokens on every no-op poll, one `curl` covers up to 30 seconds of idle time. Latency on real events stays near-zero because the server resolves waiters the moment `addInboxEvent` runs.
 
 ### YAML I/O
 

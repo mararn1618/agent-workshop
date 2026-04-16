@@ -400,6 +400,14 @@ const HTML_PAGE = `<!DOCTYPE html>
     --green: #3fb950; --orange: #d29922; --red: #f85149; --purple: #bc8cff;
     --radius: 8px; --sidebar-w: 260px; --chat-w: 300px;
   }
+  :root.light {
+    --bg: #ffffff; --bg-card: #f6f8fa; --bg-card-hover: #eef1f5;
+    --bg-sidebar: #f6f8fa; --bg-sidebar-item: #eef1f5; --bg-sidebar-active: #e2e6ea;
+    --border: #d0d7de; --border-highlight: #0969da;
+    --text: #1f2328; --text-muted: #656d76; --text-dim: #8b949e;
+    --accent: #0969da; --accent-soft: rgba(9,105,218,0.12);
+    --green: #1a7f37; --orange: #9a6700; --red: #cf222e; --purple: #8250df;
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
@@ -415,11 +423,17 @@ const HTML_PAGE = `<!DOCTYPE html>
   }
   #sidebar-header {
     padding: 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
   }
   #sidebar-header h1 {
     font-size: 15px; font-weight: 600;
     display: flex; align-items: center; gap: 8px;
   }
+  #theme-toggle {
+    background: none; border: 1px solid var(--border); color: var(--text-dim);
+    padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 13px;
+  }
+  #theme-toggle:hover { color: var(--text); border-color: var(--border-highlight); }
   #sidebar-header .dot {
     width: 8px; height: 8px; border-radius: 50%;
     background: var(--green); animation: pulse 2s infinite;
@@ -532,6 +546,20 @@ const HTML_PAGE = `<!DOCTYPE html>
     padding: 14px; overflow: auto;
   }
 
+  /* Tile resize handles */
+  .tile-resize-handle {
+    position: absolute; left: 0; right: 0; height: 8px; z-index: 10;
+    cursor: ns-resize; display: flex; align-items: center; justify-content: center;
+    bottom: -4px;
+  }
+  .tile-resize-handle::after {
+    content: ''; width: 40px; height: 3px; border-radius: 2px;
+    background: var(--border); transition: background 0.15s, width 0.15s;
+  }
+  .tile-resize-handle:hover::after, .tile-resize-handle.active::after {
+    background: var(--accent); width: 60px;
+  }
+
   /* Diagram viewport */
   .diagram-viewport { position: relative; height: 400px; overflow: hidden; cursor: grab; }
   .diagram-viewport.grabbing { cursor: grabbing; }
@@ -584,14 +612,15 @@ const HTML_PAGE = `<!DOCTYPE html>
 
   /* Comments section */
   .comments-section {
-    border-top: 1px solid var(--border); padding: 10px 14px;
-    display: none;
+    border-top: 1px solid var(--border);
   }
-  .comments-section.open { display: block; }
-  .comments-header {
-    font-size: 11px; font-weight: 600; color: var(--text-muted);
-    margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+  .comments-toggle-bar {
+    padding: 6px 14px; font-size: 11px; color: var(--text-dim);
+    cursor: pointer; text-align: center; user-select: none;
   }
+  .comments-toggle-bar:hover { color: var(--accent); background: var(--accent-soft); }
+  .comments-body { padding: 10px 14px; padding-top: 0; }
+  .comments-body.hidden { display: none; }
   .comment-item {
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
     padding: 8px 10px; margin-bottom: 6px; font-size: 12px;
@@ -624,14 +653,15 @@ const HTML_PAGE = `<!DOCTYPE html>
   .comment-actions button.apply-btn:hover { color: var(--green); border-color: var(--green); }
   .comment-actions button.remove-btn:hover { color: var(--red); border-color: var(--red); }
   .add-comment-row {
-    display: flex; gap: 6px; margin-top: 8px;
+    display: flex; flex-direction: column; gap: 6px; margin-top: 8px; align-items: flex-start;
   }
-  .add-comment-row input {
-    flex: 1; background: var(--bg); border: 1px solid var(--border);
-    color: var(--text); padding: 4px 8px; border-radius: 4px; font-size: 12px;
-    outline: none;
+  .add-comment-row textarea {
+    width: 100%; box-sizing: border-box; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 8px; border-radius: 4px; font-size: 12px;
+    outline: none; resize: vertical; min-height: 36px; max-height: 120px;
+    font-family: inherit; line-height: 1.4;
   }
-  .add-comment-row input:focus { border-color: var(--accent); }
+  .add-comment-row textarea:focus { border-color: var(--accent); }
   .add-comment-row button {
     background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent);
     padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; font-weight: 600;
@@ -644,6 +674,11 @@ const HTML_PAGE = `<!DOCTYPE html>
     background: var(--bg-sidebar); border-left: 1px solid var(--border);
     display: flex; flex-direction: column; overflow: hidden; position: relative;
   }
+  #sidebar-resize-handle {
+    width: 5px; cursor: ew-resize; z-index: 10;
+    background: transparent; transition: background 0.15s;
+  }
+  #sidebar-resize-handle:hover { background: var(--accent); opacity: 0.3; }
   #chat-resize-handle {
     position: absolute; left: -3px; top: 0; bottom: 0; width: 6px;
     cursor: ew-resize; z-index: 10;
@@ -777,6 +812,9 @@ const HTML_PAGE = `<!DOCTYPE html>
 <div id="sidebar">
   <div id="sidebar-header">
     <h1><span class="dot"></span> Workshop</h1>
+    <button id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode">&#9788;</button>
+  </div>
+  <div style="padding: 8px 16px; border-bottom: 1px solid var(--border);">
     <div id="workshop-title">Loading...</div>
     <div id="workshop-status"></div>
   </div>
@@ -785,6 +823,7 @@ const HTML_PAGE = `<!DOCTYPE html>
     <button id="finalize-btn" onclick="openFinalizeModal()">Finalize Workshop</button>
   </div>
 </div>
+<div id="sidebar-resize-handle"></div>
 <div id="main">
   <div id="slide-header" style="display:none">
     <div id="slide-title"></div>
@@ -859,6 +898,21 @@ const toastEl = document.getElementById('toast');
 let state = { workshop: null, inbox: [] };
 let activeSlideId = null;
 const cardZoomStates = new Map();
+
+/* -- Theme toggle -- */
+window.toggleTheme = function() {
+  document.documentElement.classList.toggle('light');
+  const isLight = document.documentElement.classList.contains('light');
+  localStorage.setItem('workshop-theme', isLight ? 'light' : 'dark');
+  document.getElementById('theme-toggle').textContent = isLight ? '\u263E' : '\u2606';
+};
+(function initTheme() {
+  if (localStorage.getItem('workshop-theme') === 'light') {
+    document.documentElement.classList.add('light');
+    var btn = document.getElementById('theme-toggle');
+    if (btn) btn.textContent = '\u263E';
+  }
+})();
 
 /* -- Zoom/pan helpers -- */
 function applyTransform(innerEl, st) {
@@ -937,6 +991,62 @@ function showToast(msg) {
   toastEl.classList.add('show');
   setTimeout(() => toastEl.classList.remove('show'), 2000);
 }
+
+/* -- Tile card resize -- */
+(function() {
+  let tileResizing = null;
+  document.addEventListener('mousedown', function(e) {
+    const handle = e.target.closest('.tile-resize-handle');
+    if (!handle) return;
+    e.preventDefault();
+    const tileId = handle.dataset.tileId;
+    const cardBody = document.getElementById('body-' + tileId);
+    if (!cardBody) return;
+    const currentH = cardBody.getBoundingClientRect().height;
+    cardBody.style.height = currentH + 'px';
+    const vp = cardBody.querySelector('.diagram-viewport');
+    if (vp) vp.style.height = (currentH - 28) + 'px';
+    tileResizing = { cardBody: cardBody, viewport: vp, startY: e.clientY, startH: currentH };
+    handle.classList.add('active');
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!tileResizing) return;
+    const delta = e.clientY - tileResizing.startY;
+    const newH = Math.max(80, tileResizing.startH + delta);
+    tileResizing.cardBody.style.height = newH + 'px';
+    if (tileResizing.viewport) tileResizing.viewport.style.height = (newH - 28) + 'px';
+  });
+  document.addEventListener('mouseup', function() {
+    if (!tileResizing) return;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.querySelectorAll('.tile-resize-handle.active').forEach(function(el) { el.classList.remove('active'); });
+    tileResizing = null;
+  });
+})();
+
+/* -- Sidebar resize handle -- */
+(function setupSidebarResize() {
+  const handle = document.getElementById('sidebar-resize-handle');
+  const sidebar = document.getElementById('sidebar');
+  let resizing = false, startX = 0, startW = 0;
+  handle.addEventListener('mousedown', function(e) {
+    e.preventDefault(); resizing = true; startX = e.clientX;
+    startW = sidebar.getBoundingClientRect().width;
+    document.body.style.cursor = 'ew-resize'; document.body.style.userSelect = 'none';
+  });
+  window.addEventListener('mousemove', function(e) {
+    if (!resizing) return;
+    const newW = Math.min(Math.max(startW + (e.clientX - startX), 180), 500);
+    sidebar.style.width = newW + 'px';
+    sidebar.style.minWidth = newW + 'px';
+  });
+  window.addEventListener('mouseup', function() {
+    if (resizing) { resizing = false; document.body.style.cursor = ''; document.body.style.userSelect = ''; }
+  });
+})();
 
 /* -- Chat resize handle -- */
 (function setupChatResize() {
@@ -1037,6 +1147,8 @@ async function renderSlide(slide) {
   slideMetaEl.textContent = 'Slide ' + slide.order + ' / ' + slide.tiles.length + ' tile' + (slide.tiles.length !== 1 ? 's' : '');
   slideHeaderEl.style.display = 'flex';
 
+  // (hiddenComments set persists across re-renders — declared globally)
+
   tileGridEl.innerHTML = '';
   if (slide.tiles.length === 0) {
     tileGridEl.innerHTML = '<div class="empty-state"><h2>No tiles yet</h2><p>Tiles will appear here as the agent adds content to this slide.</p></div>';
@@ -1058,14 +1170,17 @@ async function renderSlide(slide) {
       + (tile.title ? '<span class="tile-card-title">' + escapeHtml(tile.title) + '</span>' : '')
       + '</div>'
       + '<div class="tile-actions">'
-      + '<button onclick="toggleComments(\\'' + slide.id + '\\',\\'' + tile.id + '\\', this)" title="Comments (' + commentsCount + ')"'
-      + '>Comments (' + commentsCount + ')</button>'
       + '<button onclick="expandTile(\\'' + slide.id + '\\',\\'' + tile.id + '\\')" title="Fullscreen">&#9974;</button>'
       + '</div></div>'
-      + '<div class="tile-card-body"><div class="render-target" id="rt-' + tile.id + '"></div></div>'
-      + '<div class="comments-section" id="comments-' + tile.id + '">'
+      + '<div class="tile-card-body" id="body-' + tile.id + '"><div class="render-target" id="rt-' + tile.id + '"></div></div>'
+      + '<div class="tile-resize-handle" data-tile-id="' + tile.id + '"></div>'
+      + '<div class="comments-section">'
+      + '<div class="comments-toggle-bar" onclick="toggleComments(\\'' + tile.id + '\\')">'
+      + 'Comments' + (tile.comments && tile.comments.length > 0 ? ' (' + tile.comments.length + ')' : '')
+      + '</div>'
+      + '<div class="comments-body" id="comments-body-' + tile.id + '">'
       + renderCommentsHtml(slide.id, tile)
-      + '</div>';
+      + '</div></div>';
     tileGridEl.appendChild(tileEl);
   }
 
@@ -1073,10 +1188,16 @@ async function renderSlide(slide) {
   for (const tile of slide.tiles) {
     await renderTileContent(tile, 'rt-' + tile.id);
   }
+
+  // Restore hidden comment sections
+  hiddenComments.forEach(function(tileId) {
+    const el = document.getElementById('comments-body-' + tileId);
+    if (el) el.classList.add('hidden');
+  });
 }
 
 function renderCommentsHtml(slideId, tile) {
-  let html = '<div class="comments-header">Comments</div>';
+  let html = '';
   if (tile.comments && tile.comments.length > 0) {
     for (const c of tile.comments) {
       html += '<div class="comment-item">'
@@ -1095,7 +1216,7 @@ function renderCommentsHtml(slideId, tile) {
     }
   }
   html += '<div class="add-comment-row">'
-    + '<input type="text" id="comment-input-' + tile.id + '" placeholder="Add a comment..." onkeydown="if(event.key===\\'Enter\\')addComment(\\'' + slideId + '\\',\\'' + tile.id + '\\')" />'
+    + '<textarea id="comment-input-' + tile.id + '" placeholder="Add a comment... (Ctrl+Enter to submit)" rows="2" onkeydown="if(event.ctrlKey&&event.key===\\'Enter\\'){event.preventDefault();addComment(\\'' + slideId + '\\',\\'' + tile.id + '\\');}"></textarea>'
     + '<button onclick="addComment(\\'' + slideId + '\\',\\'' + tile.id + '\\')">Add</button>'
     + '</div>';
   return html;
@@ -1186,11 +1307,18 @@ chatInputEl.addEventListener('keydown', function(e) {
 });
 
 /* -- Comments -- */
-window.toggleComments = function(slideId, tileId, btn) {
-  const section = document.getElementById('comments-' + tileId);
-  if (!section) return;
-  const isOpen = section.classList.toggle('open');
-  if (btn) btn.classList.toggle('active-toggle', isOpen);
+const hiddenComments = new Set();
+
+window.toggleComments = function(tileId) {
+  const body = document.getElementById('comments-body-' + tileId);
+  if (!body) return;
+  if (body.classList.contains('hidden')) {
+    body.classList.remove('hidden');
+    hiddenComments.delete(tileId);
+  } else {
+    body.classList.add('hidden');
+    hiddenComments.add(tileId);
+  }
 };
 
 window.addComment = async function(slideId, tileId) {
@@ -1200,11 +1328,34 @@ window.addComment = async function(slideId, tileId) {
   if (!content) return;
   input.value = '';
   try {
-    await fetch('/api/tiles/' + tileId + '/comments', {
+    const res = await fetch('/api/tiles/' + tileId + '/comments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ author: 'user', content })
     });
+    const data = await res.json();
+    if (data.ok) {
+      // Optimistic local update — SSE may have already added it during the await
+      const ws = state.workshop;
+      if (ws) {
+        for (const slide of ws.slides) {
+          const tile = slide.tiles.find(t => t.id === tileId);
+          if (tile) {
+            if (!tile.comments.find(c => c.id === data.id)) {
+              tile.comments.push({ id: data.id, author: 'user', content: content, status: 'pending', createdAt: new Date().toISOString() });
+            }
+            const bodyEl = document.getElementById('comments-body-' + tileId);
+            if (bodyEl) bodyEl.innerHTML = renderCommentsHtml(slideId, tile);
+            const section = bodyEl && bodyEl.parentElement;
+            if (section) {
+              const bar = section.querySelector('.comments-toggle-bar');
+              if (bar) bar.textContent = 'Comments (' + tile.comments.length + ')';
+            }
+            break;
+          }
+        }
+      }
+    }
   } catch (err) {
     showToast('Failed to add comment');
   }

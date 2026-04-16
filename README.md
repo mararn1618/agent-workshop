@@ -27,15 +27,9 @@ curl -fsSL https://bun.sh/install | bash
 
 ### Claude Code
 
-```bash
+```
 /plugin marketplace add mararn1618/agent-workshop
 /plugin install agentic-workshop@agent-workshop
-```
-
-Or just clone it:
-
-```bash
-git clone https://github.com/mararn1618/agent-workshop ~/.claude/plugins/agentic-workshop
 ```
 
 This gives you `/workshop-prepare` and `/workshop-start` as skills.
@@ -43,55 +37,44 @@ This gives you `/workshop-prepare` and `/workshop-start` as skills.
 ### GitHub Copilot
 
 ```bash
-git clone https://github.com/mararn1618/agent-workshop /tmp/agent-workshop
-cp -r /tmp/agent-workshop/skills/* .github/skills/
+curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/install.sh | bash -s -- copilot
 ```
 
-Then reference them in `.github/copilot-instructions.md`:
+Then add to `.github/copilot-instructions.md`:
 
-```markdown
-@.github/skills/workshop-prepare/SKILL.md
-@.github/skills/workshop-start/SKILL.md
+```
+@.github/agentic-workshop/skills/workshop-prepare/SKILL.md
+@.github/agentic-workshop/skills/workshop-start/SKILL.md
 ```
 
 ### Cursor
 
 ```bash
-git clone https://github.com/mararn1618/agent-workshop /tmp/agent-workshop
-cp /tmp/agent-workshop/skills/workshop-prepare/SKILL.md .cursor/rules/workshop-prepare.md
-cp /tmp/agent-workshop/skills/workshop-start/SKILL.md .cursor/rules/workshop-start.md
+curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/install.sh | bash -s -- cursor
 ```
 
 ### Windsurf
 
 ```bash
-git clone https://github.com/mararn1618/agent-workshop /tmp/agent-workshop
-cp -r /tmp/agent-workshop/skills/* .windsurf/skills/
+curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/install.sh | bash -s -- windsurf
 ```
 
 ### Codex / OpenCode / Gemini CLI
 
-These auto-load `AGENTS.md`. Clone and reference the skills:
-
 ```bash
-git clone https://github.com/mararn1618/agent-workshop /tmp/agent-workshop
-cp -r /tmp/agent-workshop/skills ./skills
+curl -fsSL https://raw.githubusercontent.com/mararn1618/agent-workshop/main/install.sh | bash -s -- codex
 ```
 
-Add to `AGENTS.md`:
+Then add to `AGENTS.md`:
 
-```markdown
-@skills/workshop-prepare/SKILL.md
-@skills/workshop-start/SKILL.md
+```
+@agentic-workshop/skills/workshop-prepare/SKILL.md
+@agentic-workshop/skills/workshop-start/SKILL.md
 ```
 
 ### Any other agent
 
-The whole thing is a Bun server and two markdown skill files. If your agent can run `bun`, `curl`, and `open`, it can use this:
-
-1. Clone: `git clone https://github.com/mararn1618/agent-workshop`
-2. Point your agent at the two SKILL.md files in `skills/`
-3. They contain everything: API reference, YAML schema, the interactive loop protocol
+The whole thing is a Bun server and two markdown skill files. If your agent can run `bun`, `curl`, and `open`, it can use this. Point your agent at the two SKILL.md files in `skills/` - they contain everything: API reference, YAML schema, the interactive loop protocol.
 
 ## Usage
 
@@ -149,6 +132,7 @@ skills/workshop-prepare/      Prepare skill
 skills/workshop-start/        Interactive presentation skill
 docs/ARCHITECTURE.md          Architecture docs for contributors
 docs/workshops/               Output directory
+install.sh                    Installer for non-Claude-Code harnesses
 ```
 
 ## License

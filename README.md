@@ -21,10 +21,16 @@ Requires [Bun](https://bun.sh):
 curl -fsSL https://bun.sh/install | bash
 ```
 
-Copy or symlink this directory into your Claude Code plugins folder:
+Install via Claude Code:
+
+```
+/install-plugin https://github.com/mararn1618/agent-workshop
+```
+
+Or manually clone into your plugins folder:
 
 ```bash
-ln -s /path/to/agentic-workshop ~/.claude/plugins/agentic-workshop
+git clone https://github.com/mararn1618/agent-workshop ~/.claude/plugins/agentic-workshop
 ```
 
 ## Usage

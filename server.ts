@@ -714,12 +714,13 @@ const HTML_PAGE = `<!DOCTYPE html>
   }
   #chat-input-row {
     padding: 12px; border-top: 1px solid var(--border);
-    display: flex; gap: 8px;
+    display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
   }
   #chat-input {
-    flex: 1; background: var(--bg-card); border: 1px solid var(--border);
+    width: 100%; box-sizing: border-box; background: var(--bg-card); border: 1px solid var(--border);
     color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px;
-    outline: none; font-family: inherit;
+    outline: none; font-family: inherit; resize: vertical; min-height: 40px; max-height: 160px;
+    line-height: 1.4;
   }
   #chat-input:focus { border-color: var(--accent); }
   #chat-send-btn {
@@ -841,7 +842,7 @@ const HTML_PAGE = `<!DOCTYPE html>
   <div id="chat-header">Chat</div>
   <div id="chat-messages"></div>
   <div id="chat-input-row">
-    <input type="text" id="chat-input" placeholder="Type a message..." />
+    <textarea id="chat-input" placeholder="Type a message... (Ctrl+Enter to send)" rows="2"></textarea>
     <button id="chat-send-btn" onclick="sendChat()">Send</button>
   </div>
 </div>
@@ -1303,7 +1304,7 @@ window.sendChat = async function() {
 };
 
 chatInputEl.addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); sendChat(); }
 });
 
 /* -- Comments -- */

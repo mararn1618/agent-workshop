@@ -141,15 +141,19 @@ curl -s -X POST http://127.0.0.1:7892/api/chat \
   -d '{"author": "agent", "content": "Workshop is live! Take a look through the slides and let me know your thoughts. You can chat here or add comments directly on any tile."}'
 ```
 
-Then enter the polling loop:
+Then enter the polling loop. Use the **long-poll endpoint** — it blocks on the server until an event arrives (or up to ~30s timeout), so you do not need to sleep between polls. The loop is server-paced.
 
 ```
 LOOP (repeat until finalize event is received):
 
-  1. Poll the inbox for unconsumed events:
-     curl -s "http://127.0.0.1:7892/api/inbox?unconsumed=true"
+  1. Long-poll for unconsumed events (blocks up to 30s):
+     curl -s --max-time 40 "http://127.0.0.1:7892/api/inbox/wait?timeout=30"
 
-  2. For each unconsumed event, handle by type:
+     Returns:
+     - `[]` — timeout reached with no events. Immediately call it again.
+     - `[{...}, ...]` — one or more unconsumed events. Process them.
+
+  2. For each returned event, handle by type:
 
      --- type: "chat-message" ---
      The user sent a chat message.
@@ -178,9 +182,14 @@ LOOP (repeat until finalize event is received):
   3. Mark each processed event as consumed:
      curl -s -X POST "http://127.0.0.1:7892/api/inbox/<eventId>/consume"
 
-  4. Sleep briefly before the next poll:
-     sleep 3
+  4. Return to step 1 — do NOT sleep. The server will block the next call itself.
 ```
+
+### Why long-polling (and what to do if it breaks)
+
+Each long-poll call blocks on the server for up to ~30 seconds. This keeps latency near-zero for user interactions while consuming minimal context (no repeated polls, no sleep calls). One bash call = up to 30 seconds of idle time.
+
+If your polling loop is interrupted — for example by a context compaction, a crash, or the bash command timing out — do NOT worry about in-flight state. Everything is persisted in `<workshop>.workshop.live.yaml`. The user can simply re-invoke `/workshop-start` and Step 1's reconnect logic will detect the running server, skip the load, and you will resume polling right where you left off.
 
 ### Tone and personality
 
@@ -279,7 +288,8 @@ kill $(lsof -ti:7892) 2>/dev/null
 | GET | /api/chat | -- | Get chat history |
 | POST | /api/tiles/:tileId/comments | `{author, content}` | Add a comment to a tile |
 | PUT | /api/tiles/:tileId/comments/:commentId | `{status?, content?}` | Update a comment (set status to "applied") |
-| GET | /api/inbox | `?unconsumed=true` | Poll inbox for events |
+| GET | /api/inbox | `?unconsumed=true` | Poll inbox for events (returns immediately) |
+| GET | /api/inbox/wait | `?timeout=30` | Long-poll: blocks up to N seconds until events arrive |
 | POST | /api/inbox/:id/consume | -- | Mark an inbox event as consumed |
 | POST | /api/finalize | `{output_dir?, slug?}` | Finalize: writes YAML to disk, creates finalize-requested event |
 

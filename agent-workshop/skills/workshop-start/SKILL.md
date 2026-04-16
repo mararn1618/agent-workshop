@@ -1,5 +1,5 @@
 ---
-description: "Start an Agentic Workshop — load a prepared workshop, open the browser UI, and enter the interactive moderation loop. Use this after /workshop-prepare has created a .workshop.yaml file, or provide context and this skill will prepare first."
+description: "Start an Agent Workshop — load a prepared workshop, open the browser UI, and enter the interactive moderation loop. Use this after /workshop-prepare has created a .workshop.yaml file, or provide context and this skill will prepare first."
 context: fork
 allowed-tools: Bash(curl *), Bash(bun *), Bash(open *), Bash(kill *), Bash(lsof *), Read, Grep, Glob
 ---

@@ -1,5 +1,5 @@
 ---
-description: "Prepare an Agentic Workshop — gather context, structure findings into slides with tiles, and write a .workshop.yaml file. Use this when you need to prepare a visual, structured alignment workshop for a task or feature."
+description: "Prepare an Agent Workshop — gather context, structure findings into slides with tiles, and write a .workshop.yaml file. Use this when you need to prepare a visual, structured alignment workshop for a task or feature."
 context: fork
 allowed-tools: Bash(curl *), Read, Grep, Glob
 ---

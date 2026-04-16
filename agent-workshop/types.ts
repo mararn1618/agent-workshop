@@ -1,4 +1,4 @@
-// Agentic Workshop — TypeScript type definitions
+// Agent Workshop — TypeScript type definitions
 // Single source of truth for the data model. Imported by server.ts.
 
 // --- Status and type enums (literal unions) ---

@@ -88,8 +88,8 @@ curl -s -X POST http://127.0.0.1:7892/api/workshop/load \
 
 Interpret the response:
 
-- **`{"ok": true, "restoredFromLive": false, ...}`** → fresh load from the source YAML. Standard flow.
-- **`{"ok": true, "restoredFromLive": true, ...}`** → the server found a `.workshop.live.yaml` sidecar file matching this workshop's ID and restored the full in-progress state (comments, chat history, unconsumed inbox events). Brief the user: "Resumed workshop with prior state intact." Then proceed to Step 4 — skip sending an opening chat message, since there is already chat history.
+- **`{"ok": true, ...}`** → load accepted. Standard flow — proceed to confirm slides are populated.
+- **HTTP 409 with `{"ok": false, "pendingResume": true, "summary": {...}}`** → the server found a live sidecar for this workshop and is waiting for the user to choose. Tell the user: "A browser modal has appeared — pick **Resume** to restore your prior session or **Start Fresh** to begin clean." Then wait: poll `/api/health` until `currentSourcePath` matches `$WORKSHOP_FILE` and `slides > 0` — that means the user picked an option and the server applied it. Do NOT re-issue the load call.
 - **HTTP 409 with `{"ok": false, "pending": true, "summary": {...}}`** → a *different* workshop is already loaded. The server has now emitted a pending-load event; the browser will show a modal asking the user to accept (discard current, load new) or decline (keep current). **Wait for the user to decide via the browser** — poll `/api/health` until `hasPendingLoad` is false, then check `/api/workshop` to see which workshop is loaded. Do NOT retry the load call.
 - **Other errors** → report the error and stop.
 
@@ -103,7 +103,7 @@ Tell the user how many slides were loaded and give a one-line description of the
 
 ### State persistence
 
-The server writes a `<workshop>.workshop.live.yaml` sidecar file next to the source YAML on every mutation (debounced). This captures comments, chat messages, tile updates, and unconsumed inbox events. If the conversation is compacted and this skill restarts, the next `/api/workshop/load` call on the same source path will automatically restore the live state — the agent does not need to do anything special. On `/api/finalize`, the sidecar is deleted and the finalized YAML in `docs/workshops/` becomes the source of truth.
+The server writes a live-state sidecar to `~/.local/state/agent-workshop/live/` (respecting `$XDG_STATE_HOME`) on every mutation, debounced. This captures comments, chat messages, tile updates, and unconsumed inbox events across compactions or server restarts. When a fresh server sees `/api/workshop/load` for a source that has a matching sidecar, it returns the `pendingResume` 409 described above so the user can pick Resume or Start Fresh in the browser. On `/api/finalize`, the sidecar is deleted and a `<timestamp>_<slug>.finalized.workshop.yaml` is written alongside the source YAML.
 
 ## Step 3: Push Slides (if needed)
 
@@ -176,7 +176,7 @@ LOOP (repeat until finalize event is received):
 
      --- type: "finalize-requested" ---
      The user clicked finalize in the UI or the finalize endpoint was called.
-     - Read the payload: { path, slug }
+     - Read the payload: { finalizedPath, summaryPath, sourcePath, slug, timestamp }
      - EXIT the loop — proceed to Step 5
 
   3. Mark each processed event as consumed:
@@ -211,7 +211,9 @@ You are a **warm, professional colleague** moderating a workshop — not a robot
 
 When a `finalize-requested` event is received:
 
-1. Read the exported YAML file from the path in the event payload.
+The event payload contains: `{ finalizedPath, summaryPath, sourcePath, slug, timestamp }`. Use these exact values — do not derive or generate your own file paths.
+
+1. Read the exported YAML file from `finalizedPath` (absolute path from the event payload).
 2. Read the full workshop state:
    ```bash
    curl -s http://127.0.0.1:7892/api/workshop
@@ -220,7 +222,7 @@ When a `finalize-requested` event is received:
    ```bash
    curl -s http://127.0.0.1:7892/api/chat
    ```
-4. Write a curated summary to `docs/workshops/YYYY-MM-DD-<slug>.summary.md`:
+4. Write a curated summary to the exact path given by `summaryPath` from the event payload:
    - Include the workshop title and description
    - Summarize each slide's content in 1-2 sentences
    - Replace diagram/SVG/HTML tile content with `[diagram: <title>]` placeholders
@@ -257,16 +259,23 @@ When a `finalize-requested` event is received:
 
 ## Step 6: Report and Exit
 
-Tell the user:
+Output the following closing message (use the absolute paths from the event payload):
 
-- Workshop finalized.
-- YAML state saved to: `docs/workshops/<file>.workshop.yaml`
-- Summary written to: `docs/workshops/<file>.summary.md`
-- Suggest next step: "Ready for `/discuss-plan-implement:create-plan` when you are."
+```
+Workshop finalized.
+- Summary (LLM-optimized, no diagrams): <summaryPath absolute>
+- Full finalized state: <finalizedPath absolute>
+
+Read the summary file now before proceeding with any follow-up work based on this workshop.
+```
+
+Then use the `Read` tool to read the summary file at `summaryPath` before doing anything else.
 
 ## Stopping the Server
 
-If the user asks to stop the workshop server:
+After finalization, the server shuts itself down automatically after a 30-second grace period — no manual action needed.
+
+If you need to abandon a non-finalized workshop (before finalize has been called), kill the server manually:
 
 ```bash
 kill $(lsof -ti:7892) 2>/dev/null
@@ -276,9 +285,12 @@ kill $(lsof -ti:7892) 2>/dev/null
 
 | Method | Path | Body | Description |
 |--------|------|------|-------------|
-| GET | /api/health | -- | Health check: returns status, slide count, chat count |
+| GET | /api/health | -- | Health check: returns status, slide count, chat count; includes `pendingResume` flag when relevant |
+| GET | /api/workshops | -- | List all known workshops (slug, path, timestamps) |
 | GET | /api/workshop | -- | Get full workshop state (slides, chat, status) |
-| POST | /api/workshop/load | `{path: string}` | Load workshop from a YAML file on disk |
+| POST | /api/workshop/load | `{path: string}` | Load workshop from a YAML file; returns `pendingResume: true` if a live sidecar exists |
+| POST | /api/workshop/load/resume | -- | Confirm resume: restore sidecar state for the pending load |
+| POST | /api/workshop/load/fresh | -- | Confirm fresh start: discard sidecar and load clean from source YAML |
 | POST | /api/slides | `{title, order, tiles[]}` | Push a new slide |
 | PUT | /api/slides/:id | `{title?, order?, tiles?}` | Update an existing slide |
 | DELETE | /api/slides/:id | -- | Remove a slide |
@@ -291,7 +303,7 @@ kill $(lsof -ti:7892) 2>/dev/null
 | GET | /api/inbox | `?unconsumed=true` | Poll inbox for events (returns immediately) |
 | GET | /api/inbox/wait | `?timeout=30` | Long-poll: blocks up to N seconds until events arrive |
 | POST | /api/inbox/:id/consume | -- | Mark an inbox event as consumed |
-| POST | /api/finalize | `{output_dir?, slug?}` | Finalize: writes YAML to disk, creates finalize-requested event |
+| POST | /api/finalize | `{output_dir?, slug?}` | Finalize: writes YAML to disk, shuts down server after 30s grace |
 
 ### Inbox event types
 
@@ -299,7 +311,7 @@ kill $(lsof -ti:7892) 2>/dev/null
 |------|---------|---------|
 | `chat-message` | `{messageId, content}` | User posts a chat message |
 | `comment-applied` | `{tileId, commentId, content}` | User applies a comment on a tile |
-| `finalize-requested` | `{path, slug}` | Finalize endpoint is called |
+| `finalize-requested` | `{finalizedPath, summaryPath, sourcePath, slug, timestamp}` | Finalize endpoint is called |
 
 ### Tile types
 

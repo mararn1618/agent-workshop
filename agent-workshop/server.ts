@@ -2321,7 +2321,7 @@ const server = Bun.serve({
           currentSourcePath = sourcePath;
           pendingLoad = null;
           broadcastState();
-          return jsonResponse({ ok: true, id: workshop.id, restoredFromLive: false });
+          return jsonResponse({ ok: true, id: workshop.id });
         } catch (err: any) {
           return jsonResponse({ ok: false, error: err.message }, 500);
         }

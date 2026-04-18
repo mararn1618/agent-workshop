@@ -8,7 +8,7 @@ This document is intended for agents and developers picking up work on the plugi
 .
 ├── .claude-plugin/
 │   └── plugin.json            # Plugin metadata (name, version, author)
-├── server.ts                  # Single-file Bun server (~1900 lines): REST API + embedded UI + YAML I/O
+├── server.ts                  # Single-file Bun server: REST API + embedded UI + YAML I/O
 ├── types.ts                   # TypeScript type definitions — single source of truth for the data model
 ├── skills/
 │   ├── workshop-prepare/
@@ -60,15 +60,16 @@ All types are defined in `types.ts` and imported by `server.ts`. Never duplicate
 
 Single-file Bun server following the claude-viz pattern. Port 7892 (configurable via `WORKSHOP_PORT` env var), host 127.0.0.1 (`WORKSHOP_HOST`).
 
-### Major sections (by line range)
+### Major sections
 
 | Section | Description |
 |---------|-------------|
-| In-memory state (~23-70) | Workshop object, inbox array, SSE client set, helper functions |
-| YAML serializer (~71-367) | Custom inline YAML serializer/deserializer (no external dependencies) |
-| CORS helper (~368-384) | Adds CORS headers to all responses |
-| Embedded HTML/CSS/JS (~385-1465) | Full browser UI as a template string |
-| HTTP server (~1466-1906) | Bun.serve with all REST API route handlers |
+| Server lifecycle infrastructure | XDG state dir resolution, PID file, project-root helper, `checkExistingServer` idempotency guard, SIGINT/SIGTERM handlers |
+| In-memory state | Workshop object, inbox array, SSE client set, pendingLoad/pendingResume slots, shutdown timer, helper functions |
+| YAML serializer | Custom inline YAML serializer/deserializer (no external dependencies) |
+| CORS helper | Adds CORS headers to all responses |
+| Embedded HTML/CSS/JS | Full browser UI as a template string |
+| HTTP server | Bun.serve with all REST API route handlers |
 
 ### REST API
 
@@ -76,9 +77,12 @@ Single-file Bun server following the claude-viz pattern. Port 7892 (configurable
 |--------|------|-------------|
 | GET | /api/health | Health check: status, slide count, chat count, current source path, pending-load flag |
 | GET | /api/workshop | Full workshop state |
-| POST | /api/workshop/load | Load workshop from a YAML file path on disk (auto-restores from live sidecar; 409 if a different workshop is active) |
+| GET | /api/workshops | List known live-state sessions on disk (id, slug, timestamp, lastModified, livePath, title) |
+| POST | /api/workshop/load | Load workshop from an absolute YAML path; returns 409 `pendingResume: true` when a matching live sidecar exists, 409 `pending: true` when a different workshop is already loaded, 503 during shutdown grace |
 | POST | /api/workshop/load/confirm | Apply a pending load (user clicked Accept in browser) |
 | POST | /api/workshop/load/cancel | Decline a pending load (user clicked Decline in browser) |
+| POST | /api/workshop/load/resume | Apply live-sidecar state (user clicked Resume in browser) |
+| POST | /api/workshop/load/fresh | Discard live sidecar and apply source state (user clicked Start Fresh) |
 | POST | /api/slides | Push a new slide |
 | PUT | /api/slides/:id | Update a slide |
 | DELETE | /api/slides/:id | Remove a slide |
@@ -91,12 +95,15 @@ Single-file Bun server following the claude-viz pattern. Port 7892 (configurable
 | GET | /api/inbox | Poll inbox (query: `?unconsumed=true`) — returns immediately |
 | GET | /api/inbox/wait | Long-poll (query: `?timeout=30`, max 55) — blocks until an event arrives or timeout |
 | POST | /api/inbox/:id/consume | Mark an inbox event as consumed |
-| POST | /api/finalize | Write full workshop state to YAML on disk |
+| POST | /api/finalize | Write finalized YAML alongside source; delete live sidecar; broadcast SSE `shutting-down` countdown; `process.exit(0)` after 30s grace |
 | GET | /api/events | SSE stream for live browser updates |
 
 ### SSE (Server-Sent Events)
 
-The server broadcasts a `workshop-update` event to all connected browsers whenever state changes. The event payload is `{ workshop, inbox }`. The browser UI listens on `EventSource('/api/events')` and re-renders on each update.
+The server broadcasts two event types to all connected browsers on `EventSource('/api/events')`:
+
+- `workshop-update` — fires on any state change. Payload `{ workshop, inbox, pendingLoad, pendingResume }`. The browser re-renders from the full state object.
+- `shutting-down` — fires once per second during the post-finalize grace period. Payload `{ remainingSeconds }`. The browser shows a countdown banner and disables inputs.
 
 ### Inbox event system
 
@@ -122,20 +129,25 @@ This reduces context bloat during a workshop session: instead of the agent issui
 The server includes a custom inline YAML serializer and deserializer — no external dependencies (no js-yaml). This keeps the server fully self-contained as a single file.
 
 - **Load**: `POST /api/workshop/load` reads a `.workshop.yaml` file from disk, parses it, and populates in-memory state.
-- **Finalize**: `POST /api/finalize` serializes the current workshop state to YAML and writes it to `docs/workshops/`.
+- **Finalize**: `POST /api/finalize` serializes the current workshop state to YAML and writes it alongside the source as `<timestamp>_<slug>.finalized.workshop.yaml`.
 
 ### Live-state persistence (compaction-safe)
 
-On every state mutation (tile update, comment add/apply, chat post, slide change, inbox event), the server debounces a write (300ms) of the full in-memory state — workshop, comments, chat, AND the inbox — to a sidecar file next to the source YAML:
+On every state mutation (tile update, comment add/apply, chat post, slide change, inbox event), the server debounces a write (300ms) of the full in-memory state — workshop, comments, chat, AND the inbox — to a sidecar file in a user-level state directory:
 
 ```
-docs/workshops/my-workshop.workshop.yaml         ← source (never modified during session)
-docs/workshops/my-workshop.workshop.live.yaml    ← live sidecar (overwritten on every change)
+$STATE_DIR = $XDG_STATE_HOME/agent-workshop  (fallback: ~/.local/state/agent-workshop)
+
+<project-root>/docs/workshops/<timestamp>_<slug>.workshop.yaml  ← source (never modified during session)
+$STATE_DIR/live/<timestamp>_<slug>_<id>.live.yaml               ← live sidecar (overwritten on every change)
+$STATE_DIR/server.pid                                           ← PID file for idempotency
 ```
 
-When `/api/workshop/load` is called, it checks for a live sidecar whose `id` matches the source YAML's `id`. If present, the server loads the sidecar instead — preserving all in-progress state. This makes the session resilient to agent context compaction: if the agent restarts and dutifully re-runs load, the live state is automatically restored (response includes `restoredFromLive: true`).
+Keeping live state out of the project repo avoids `.gitignore` drift and puts machine-local ephemeral state where it belongs.
 
-On `/api/finalize`, the live sidecar is deleted — the finalized YAML in `docs/workshops/` is the source of truth from that point on, and a stale sidecar must not linger and resurrect post-finalize state on the next load.
+When `/api/workshop/load` is called on a fresh server (no workshop loaded yet) and a sidecar exists whose `id` matches the source YAML's `id`, the server does **not** auto-restore. Instead it stashes the parsed live + source states in a `pendingResume` slot, broadcasts an SSE update so the browser shows a Resume/Start-Fresh modal, and returns HTTP 409 `{ok: false, pendingResume: true, summary}`. The user's choice is committed via `POST /api/workshop/load/resume` (apply live state) or `POST /api/workshop/load/fresh` (delete sidecar, apply source). This keeps resume-vs-fresh as a deterministic user decision rather than an agent guess that becomes unreliable after context compaction.
+
+On `/api/finalize`, the live sidecar is deleted and a `<timestamp>_<slug>.finalized.workshop.yaml` is written alongside the source — the finalized artifact is the source of truth from that point on, and a stale sidecar must not linger and resurrect post-finalize state on the next load.
 
 ### Safe-load and pending-load confirmation
 
@@ -197,7 +209,7 @@ When the agent processes a `comment-applied` event, it updates the tile content 
 
 ### Phase 1: Prepare (`/workshop-prepare`)
 
-The agent gathers context (Read/Grep/Glob), structures findings into slides, and writes a `.workshop.yaml` file to `docs/workshops/`. No server, no browser — pure file output.
+The agent gathers context (Read/Grep/Glob), structures findings into slides, and writes a `<timestamp>_<slug>.workshop.yaml` file to `<project-root>/docs/workshops/` (project root resolved via `git rev-parse --show-toplevel`, `$PWD` fallback). No server, no browser — pure file output.
 
 ### Phase 2: Present (`/workshop-start`)
 
@@ -217,12 +229,15 @@ The agent starts the server, loads the YAML, opens the browser, and enters an in
 
 ## Output artifacts
 
-After finalization, two files are written to `docs/workshops/`:
+After finalization, three files sit together in `<project-root>/docs/workshops/` (timestamp and slug inherited from the source YAML so they group alphabetically):
 
-| File | Content |
-|------|---------|
-| `YYYY-MM-DD-<slug>.workshop.yaml` | Full workshop state (slides, tiles, comments, chat) |
-| `YYYY-MM-DD-<slug>.summary.md` | Agent-curated summary suitable as LLM context for downstream planning |
+| File | Written by | Content |
+|------|-----------|---------|
+| `YYYY-MM-DD_HH-MM_<slug>.workshop.yaml` | `/workshop-prepare` | Source input — preserved unmodified through the session |
+| `YYYY-MM-DD_HH-MM_<slug>.finalized.workshop.yaml` | server (`/api/finalize`) | Full post-session state (slides, tiles, comments, chat, `status: finalized`) |
+| `YYYY-MM-DD_HH-MM_<slug>.summary.md` | `/workshop-start` | Agent-curated summary suitable as LLM context for downstream planning |
+
+The live sidecar at `$STATE_DIR/live/` is deleted on finalize.
 
 ## Extension points
 

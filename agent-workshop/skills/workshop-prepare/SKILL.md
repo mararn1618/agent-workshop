@@ -19,7 +19,7 @@ If no specific topic is given, explore the project structure and create a genera
 1. You gather context about the task using Read/Grep/Glob
 2. You organize findings into slides, each covering one thought unit
 3. You serialize the workshop as YAML matching the data model
-4. You write the YAML file to `docs/workshops/`
+4. You write the YAML file to `<project-root>/docs/workshops/`
 5. The user later runs `/workshop-start` to launch the interactive browser session
 
 This skill does NOT start a server, open a browser, or modify any project code. It only produces the YAML file.

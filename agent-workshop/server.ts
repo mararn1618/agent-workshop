@@ -16,9 +16,106 @@ import type {
   InboxEvent,
   InboxEventType,
 } from "./types";
+import { mkdirSync, unlinkSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "fs";
+import path from "path";
 
 const PORT = parseInt(process.env.WORKSHOP_PORT || "7892");
 const HOST = process.env.WORKSHOP_HOST || "127.0.0.1";
+
+// --- Server lifecycle infrastructure ---
+
+export function getStateDir(): string {
+  const xdg = process.env.XDG_STATE_HOME;
+  const base = xdg || `${process.env.HOME}/.local/state`;
+  return `${base}/agent-workshop`;
+}
+
+export function getLiveDir(): string {
+  return `${getStateDir()}/live`;
+}
+
+export function getPidFile(): string {
+  return `${getStateDir()}/server.pid`;
+}
+
+export function ensureStateDirs(): void {
+  mkdirSync(getStateDir(), { recursive: true });
+  mkdirSync(getLiveDir(), { recursive: true });
+}
+
+export function resolveProjectRoot(startDir?: string): string {
+  const result = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], {
+    cwd: startDir || process.cwd(),
+  });
+  if (result.exitCode === 0) {
+    return result.stdout.toString().trim();
+  }
+  return startDir || process.cwd();
+}
+
+interface PidFileData {
+  pid: number;
+  port: number;
+  startedAt: string;
+}
+
+export async function checkExistingServer(): Promise<
+  | { alive: true; pid: number; port: number; startedAt: string }
+  | { alive: false }
+> {
+  const pidFile = getPidFile();
+  if (!existsSync(pidFile)) return { alive: false };
+
+  let data: PidFileData;
+  try {
+    data = JSON.parse(readFileSync(pidFile, "utf8"));
+  } catch {
+    removePidFile();
+    return { alive: false };
+  }
+
+  let processAlive = false;
+  try {
+    process.kill(data.pid, 0);
+    processAlive = true;
+  } catch {
+    // process not running
+  }
+
+  if (!processAlive) {
+    removePidFile();
+    return { alive: false };
+  }
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${data.port}/`, { signal: AbortSignal.timeout(2000) });
+    if (res.ok || res.status < 500) {
+      return { alive: true, pid: data.pid, port: data.port, startedAt: data.startedAt };
+    }
+  } catch {
+    // server not responding
+  }
+
+  removePidFile();
+  return { alive: false };
+}
+
+export function writePidFile(): void {
+  const data: PidFileData = {
+    pid: process.pid,
+    port: PORT,
+    startedAt: new Date().toISOString(),
+  };
+  writeFileSync(getPidFile(), JSON.stringify(data));
+}
+
+export function removePidFile(): void {
+  try {
+    unlinkSync(getPidFile());
+  } catch {
+    // best-effort
+  }
+}
 
 // --- In-memory state ---
 
@@ -49,7 +146,17 @@ interface PendingLoad {
 }
 let pendingLoad: PendingLoad | null = null;
 
+interface PendingResume {
+  sourcePath: string;
+  sourceParsed: Record<string, unknown>;
+  liveParsed: Record<string, unknown>;
+  requestedAt: string;
+}
+let pendingResume: PendingResume | null = null;
+
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let shuttingDownAt: number | null = null;
+let shutdownInterval: ReturnType<typeof setInterval> | null = null;
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -93,8 +200,34 @@ function pendingLoadSummary() {
   };
 }
 
+function pendingResumeSummary() {
+  if (!pendingResume) return null;
+  const src = pendingResume.sourceParsed;
+  const live = pendingResume.liveParsed;
+  const liveSlides = (live.slides as unknown[]) || [];
+  const liveCommentCount = liveSlides.reduce((sum: number, s: any) => {
+    return sum + ((s.tiles as unknown[]) || []).reduce((ss: number, t: any) => ss + ((t.comments as unknown[]) || []).length, 0);
+  }, 0);
+  const liveChatCount = ((live.chat as unknown[]) || []).length;
+  return {
+    sourcePath: pendingResume.sourcePath,
+    sourceSummary: {
+      id: src.id as string,
+      title: (src.title as string) || "Untitled",
+      slideCount: ((src.slides as unknown[]) || []).length,
+    },
+    liveSummary: {
+      id: live.id as string,
+      title: (live.title as string) || "Untitled",
+      slideCount: liveSlides.length,
+      commentCount: liveCommentCount,
+      chatCount: liveChatCount,
+    },
+  };
+}
+
 function broadcastState() {
-  broadcast("workshop-update", { workshop, inbox, pendingLoad: pendingLoadSummary() });
+  broadcast("workshop-update", { workshop, inbox, pendingLoad: pendingLoadSummary(), pendingResume: pendingResumeSummary() });
   schedulePersist();
 }
 
@@ -122,12 +255,31 @@ function notifyInboxWaiters() {
   }
 }
 
-function livePathFor(sourcePath: string): string {
-  const suffix = ".workshop.yaml";
-  if (sourcePath.endsWith(suffix)) {
-    return sourcePath.slice(0, -suffix.length) + ".workshop.live.yaml";
+function parseSourceFilename(sourcePath: string): { timestamp: string; slug: string } | null {
+  const base = path.basename(sourcePath);
+  const m = base.match(/^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2})_(.+)\.workshop\.yaml$/);
+  if (!m) return null;
+  return { timestamp: m[1], slug: m[2] };
+}
+
+function buildLiveFilename(timestamp: string, slug: string, id: string): string {
+  return `${timestamp}_${slug}_${id}.live.yaml`;
+}
+
+function buildFinalizedFilenames(timestamp: string, slug: string): { finalizedFilename: string; summaryFilename: string } {
+  return {
+    finalizedFilename: `${timestamp}_${slug}.finalized.workshop.yaml`,
+    summaryFilename: `${timestamp}_${slug}.summary.md`,
+  };
+}
+
+function livePathFor(sourcePath: string, id: string): string {
+  const parsed = parseSourceFilename(sourcePath);
+  if (parsed) {
+    return `${getLiveDir()}/${buildLiveFilename(parsed.timestamp, parsed.slug, id)}`;
   }
-  return sourcePath + ".live";
+  console.warn(`livePathFor: could not parse source filename '${path.basename(sourcePath)}', using fallback`);
+  return `${getLiveDir()}/unknown_${id}.live.yaml`;
 }
 
 function schedulePersist() {
@@ -141,7 +293,7 @@ function schedulePersist() {
 
 async function persistLive() {
   if (!currentSourcePath) return;
-  const livePath = livePathFor(currentSourcePath);
+  const livePath = livePathFor(currentSourcePath, workshop.id);
   try {
     await Bun.write(livePath, serializeLiveState());
   } catch (err) {
@@ -984,6 +1136,50 @@ const HTML_PAGE = `<!DOCTYPE html>
     background: var(--accent); color: #fff; border: none;
   }
   .modal-btn-confirm:hover { opacity: 0.85; }
+  .modal-btn-danger {
+    background: var(--red); color: #fff; border: none;
+  }
+  .modal-btn-danger:hover { opacity: 0.85; }
+
+  /* Shutdown banner */
+  .shutdown-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 300;
+    background: #7c1d1d; color: #fca5a5; text-align: center;
+    padding: 8px 16px; font-size: 13px; font-weight: 600;
+    border-bottom: 1px solid #f87171;
+  }
+
+  /* Workshops modal */
+  .workshops-list { margin-bottom: 16px; max-height: 280px; overflow-y: auto; }
+  .workshop-entry {
+    padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px;
+    margin-bottom: 8px; font-size: 12px; color: var(--text-muted);
+  }
+  .workshop-entry-title { font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .workshop-entry-meta { font-size: 11px; color: var(--text-dim); }
+  .workshops-load-row {
+    display: flex; gap: 8px; align-items: center; margin-top: 8px;
+  }
+  .workshops-load-row input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 10px; border-radius: 4px; font-size: 12px; outline: none;
+  }
+  .workshops-load-row input:focus { border-color: var(--accent); }
+  .workshops-load-row button {
+    background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent);
+    padding: 6px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .workshops-load-row button:hover { background: var(--accent); color: #fff; }
+
+  /* Resume/Fresh modal two-card layout */
+  .resume-cards { display: flex; gap: 10px; margin-bottom: 12px; }
+  .resume-card {
+    flex: 1; padding: 10px; background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 6px; font-size: 12px; color: var(--text-muted);
+  }
+  .resume-card-title { font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .resume-card.highlight { border-color: var(--accent); }
+  .resume-card-meta { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -999,6 +1195,7 @@ const HTML_PAGE = `<!DOCTYPE html>
   <div id="slide-list"></div>
   <div id="sidebar-footer">
     <button id="finalize-btn" onclick="openFinalizeModal()">Finalize Workshop</button>
+    <button id="workshops-btn" onclick="openWorkshopsModal()" style="width:100%;margin-top:6px;padding:6px;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:6px;cursor:pointer;font-size:11px;font-weight:500;">Workshops</button>
   </div>
 </div>
 <div id="sidebar-resize-handle"></div>
@@ -1063,6 +1260,35 @@ const HTML_PAGE = `<!DOCTYPE html>
   </div>
 </div>
 
+<div class="modal-overlay" id="resume-fresh-modal">
+  <div class="modal-box" style="min-width:480px;">
+    <h3>Resume previous state or start fresh?</h3>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:14px;">This workshop has in-progress state from a previous session. Resume or start fresh?</p>
+    <div id="resume-fresh-cards" class="resume-cards"></div>
+    <div class="modal-btns">
+      <button class="modal-btn-confirm" onclick="acceptResume()">Resume</button>
+      <button class="modal-btn-danger" onclick="declineResume()">Start Fresh &mdash; discards saved state</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="workshops-modal">
+  <div class="modal-box" style="min-width:500px;">
+    <h3>Workshops</h3>
+    <div id="workshops-list" class="workshops-list"><em style="color:var(--text-dim);font-size:12px;">Loading...</em></div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">Load workshop by source path:</div>
+    <div class="workshops-load-row">
+      <input type="text" id="workshops-path-input" placeholder="/abs/path/to/workshop.yaml" />
+      <button onclick="loadWorkshopByPath()">Load</button>
+    </div>
+    <div class="modal-btns" style="margin-top:16px;">
+      <button class="modal-btn-cancel" onclick="closeWorkshopsModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="shutdown-banner" class="shutdown-banner" style="display:none"></div>
+
 <script type="module">
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
 import { marked } from 'https://cdn.jsdelivr.net/npm/marked@15/lib/marked.esm.js';
@@ -1084,7 +1310,8 @@ const fsViewportEl = document.getElementById('fs-viewport');
 const fsInnerEl = document.getElementById('fs-inner');
 const toastEl = document.getElementById('toast');
 
-let state = { workshop: null, inbox: [], pendingLoad: null };
+let state = { workshop: null, inbox: [], pendingLoad: null, pendingResume: null };
+let isShuttingDown = false;
 let activeSlideId = null;
 const cardZoomStates = new Map();
 const commentDrafts = new Map();
@@ -1269,11 +1496,27 @@ function connectSSE() {
   const es = new EventSource('/api/events');
   es.addEventListener('workshop-update', (e) => {
     const data = JSON.parse(e.data);
-    state = data;
+    state.workshop = data.workshop;
+    state.inbox = data.inbox;
+    state.pendingLoad = data.pendingLoad;
+    state.pendingResume = data.pendingResume;
     render();
+    // pendingLoad wins over pendingResume — resume modal only shown when no load is pending
+    renderPendingLoadModal();
+    renderResumeFreshModal();
+  });
+  es.addEventListener('shutting-down', (e) => {
+    const { remainingSeconds } = JSON.parse(e.data);
+    isShuttingDown = true;
+    applyShuttingDownUI(remainingSeconds);
   });
   es.onerror = () => {
     es.close();
+    if (isShuttingDown) {
+      document.getElementById('shutdown-banner').style.display = 'block';
+      document.getElementById('shutdown-banner').textContent = 'Server has stopped.';
+      return;
+    }
     setTimeout(connectSSE, 2000);
   };
 }
@@ -1294,6 +1537,7 @@ async function hydrate() {
 /* -- Render -- */
 function render() {
   renderPendingLoadModal();
+  renderResumeFreshModal();
 
   const ws = state.workshop;
   if (!ws) return;
@@ -1727,6 +1971,141 @@ window.declinePendingLoad = async function() {
   }
 };
 
+/* -- Resume/Fresh modal -- */
+function renderResumeFreshModal() {
+  const modal = document.getElementById('resume-fresh-modal');
+  const cardsEl = document.getElementById('resume-fresh-cards');
+  const pr = state.pendingResume;
+  // pendingLoad takes precedence — only show resume modal when no load is pending
+  if (pr && !state.pendingLoad) {
+    const live = pr.liveSummary;
+    const src = pr.sourceSummary;
+    cardsEl.innerHTML =
+      '<div class="resume-card highlight">'
+      + '<div class="resume-card-title">Saved state (live)</div>'
+      + '<div>' + escapeHtml(live.title) + '</div>'
+      + '<div class="resume-card-meta">'
+      + live.slideCount + ' slide' + (live.slideCount !== 1 ? 's' : '') + ' &middot; '
+      + live.commentCount + ' comment' + (live.commentCount !== 1 ? 's' : '') + ' &middot; '
+      + live.chatCount + ' chat msg' + (live.chatCount !== 1 ? 's' : '')
+      + '</div></div>'
+      + '<div class="resume-card">'
+      + '<div class="resume-card-title">Source file</div>'
+      + '<div>' + escapeHtml(src.title) + '</div>'
+      + '<div class="resume-card-meta">'
+      + src.slideCount + ' slide' + (src.slideCount !== 1 ? 's' : '')
+      + '</div></div>';
+    modal.classList.add('active');
+  } else {
+    modal.classList.remove('active');
+  }
+}
+
+window.acceptResume = async function() {
+  try {
+    const res = await fetch('/api/workshop/load/resume', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) showToast('Resumed previous session');
+    else showToast('Resume failed: ' + (data.error || 'unknown'));
+  } catch {
+    showToast('Resume request failed');
+  }
+};
+
+window.declineResume = async function() {
+  try {
+    const res = await fetch('/api/workshop/load/fresh', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) showToast('Started fresh');
+    else showToast('Start fresh failed: ' + (data.error || 'unknown'));
+  } catch {
+    showToast('Start fresh request failed');
+  }
+};
+
+/* -- Workshops modal -- */
+window.openWorkshopsModal = async function() {
+  document.getElementById('workshops-modal').classList.add('active');
+  const listEl = document.getElementById('workshops-list');
+  listEl.innerHTML = '<em style="color:var(--text-dim);font-size:12px;">Loading...</em>';
+  try {
+    const res = await fetch('/api/workshops');
+    const entries = await res.json();
+    if (!Array.isArray(entries) || entries.length === 0) {
+      listEl.innerHTML = '<em style="color:var(--text-dim);font-size:12px;">No saved workshops found.</em>';
+      return;
+    }
+    let html = '';
+    for (const e of entries) {
+      const modified = e.lastModified ? new Date(e.lastModified).toLocaleString() : '—';
+      html += '<div class="workshop-entry">'
+        + '<div class="workshop-entry-title">' + escapeHtml(e.title || 'Untitled') + '</div>'
+        + '<div class="workshop-entry-meta">'
+        + (e.slug ? 'Slug: ' + escapeHtml(e.slug) + ' &middot; ' : '')
+        + (e.timestamp ? e.timestamp + ' &middot; ' : '')
+        + 'Modified: ' + modified
+        + '</div>'
+        + '<div class="workshop-entry-meta" style="margin-top:2px;">'
+        + escapeHtml(e.livePath || '')
+        + '</div>'
+        + '</div>';
+    }
+    listEl.innerHTML = html;
+  } catch {
+    listEl.innerHTML = '<em style="color:var(--red);font-size:12px;">Failed to load workshops.</em>';
+  }
+};
+
+window.closeWorkshopsModal = function() {
+  document.getElementById('workshops-modal').classList.remove('active');
+};
+
+window.loadWorkshopByPath = async function() {
+  if (isShuttingDown) { showToast('Server is shutting down'); return; }
+  const input = document.getElementById('workshops-path-input');
+  const path = input.value.trim();
+  if (!path) { showToast('Enter a source path'); return; }
+  try {
+    const res = await fetch('/api/workshop/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast('Workshop loaded');
+      closeWorkshopsModal();
+    } else if (data.pending || data.pendingResume) {
+      showToast('Awaiting browser confirmation...');
+      closeWorkshopsModal();
+    } else {
+      showToast('Load failed: ' + (data.error || 'unknown'));
+    }
+  } catch {
+    showToast('Load request failed');
+  }
+};
+
+/* -- Shutting-down banner -- */
+function applyShuttingDownUI(remainingSeconds) {
+  const banner = document.getElementById('shutdown-banner');
+  banner.style.display = 'block';
+  if (remainingSeconds > 0) {
+    banner.textContent = 'Workshop server is shutting down in ' + remainingSeconds + 's — please finish any pending reads.';
+  } else {
+    banner.textContent = 'Server has stopped.';
+  }
+  // Disable interactive controls during shutdown
+  const chatInput = document.getElementById('chat-input');
+  const chatSend = document.getElementById('chat-send-btn');
+  const finalizeBtn = document.getElementById('finalize-btn');
+  const workshopsBtn = document.getElementById('workshops-btn');
+  if (chatInput) chatInput.disabled = true;
+  if (chatSend) chatSend.disabled = true;
+  if (finalizeBtn) finalizeBtn.disabled = true;
+  if (workshopsBtn) workshopsBtn.disabled = true;
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeFullscreen();
@@ -1738,6 +2117,43 @@ hydrate();
 </script>
 </body>
 </html>`;
+
+function beginShutdownGrace() {
+  shuttingDownAt = Date.now() + 30_000;
+  broadcast("shutting-down", { remainingSeconds: 30 });
+  shutdownInterval = setInterval(() => {
+    const remaining = Math.max(0, Math.ceil(((shuttingDownAt as number) - Date.now()) / 1000));
+    broadcast("shutting-down", { remainingSeconds: remaining });
+    if (remaining <= 0) {
+      clearInterval(shutdownInterval!);
+      shutdownInterval = null;
+      removePidFile();
+      process.exit(0);
+    }
+  }, 1000);
+}
+
+// --- Server lifecycle startup ---
+
+ensureStateDirs();
+
+const existingServer = await checkExistingServer();
+if (existingServer.alive) {
+  console.log(`Agent Workshop server already running at http://127.0.0.1:${existingServer.port}`);
+  process.exit(0);
+}
+
+writePidFile();
+
+process.on("SIGINT", () => {
+  removePidFile();
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  removePidFile();
+  process.exit(0);
+});
 
 // --- Server ---
 
@@ -1801,10 +2217,14 @@ const server = Bun.serve({
     }
 
     // POST workshop/load — Load from YAML file.
-    // Auto-restores from .live.yaml if present and workshop ID matches (survives agent compaction).
-    // If a different workshop is currently loaded, returns 409 with a pending-load flag until the user confirms.
+    // Returns 503 during grace period, 409 when different workshop loaded or sidecar resume prompt needed.
     if (url.pathname === "/api/workshop/load" && req.method === "POST") {
       return (async () => {
+        if (shuttingDownAt !== null) {
+          const remainingSeconds = Math.max(0, Math.ceil((shuttingDownAt - Date.now()) / 1000));
+          return jsonResponse({ error: "shutting-down", remainingSeconds }, 503);
+        }
+
         let body: { path: string; force?: boolean };
         try {
           body = await req.json();
@@ -1814,32 +2234,16 @@ const server = Bun.serve({
         if (!body.path) {
           return jsonResponse({ ok: false, error: "Missing 'path' field" }, 400);
         }
+        if (!body.path.startsWith("/")) {
+          return jsonResponse({ ok: false, error: "path must be absolute" }, 400);
+        }
         try {
-          const sourcePath = body.path.startsWith("/")
-            ? body.path
-            : `${process.cwd()}/${body.path}`;
-
+          const sourcePath = body.path;
           const sourceText = await Bun.file(sourcePath).text();
           const sourceParsed = yamlParse(sourceText) as Record<string, unknown>;
           const sourceId = (sourceParsed.id as string) || "";
 
-          let toLoad: Record<string, unknown> = sourceParsed;
-          let restoredFromLive = false;
-
-          const livePath = livePathFor(sourcePath);
-          const liveFile = Bun.file(livePath);
-          if (await liveFile.exists()) {
-            try {
-              const liveText = await liveFile.text();
-              const liveParsed = yamlParse(liveText) as Record<string, unknown>;
-              if ((liveParsed.id as string) === sourceId) {
-                toLoad = liveParsed;
-                restoredFromLive = true;
-              }
-            } catch (err) {
-              console.error("Failed to read live state, falling back to source:", err);
-            }
-          }
+          const livePath = livePathFor(sourcePath, sourceId);
 
           const hasActiveWorkshop =
             currentSourcePath !== null ||
@@ -1851,7 +2255,7 @@ const server = Bun.serve({
           if (loadingDifferentWorkshop && !body.force) {
             pendingLoad = {
               sourcePath,
-              parsedData: toLoad,
+              parsedData: sourceParsed,
               requestedAt: new Date().toISOString(),
             };
             broadcastState();
@@ -1859,19 +2263,65 @@ const server = Bun.serve({
               {
                 ok: false,
                 pending: true,
-                reason:
-                  "A different workshop is currently loaded. Waiting for browser confirmation.",
+                reason: "A different workshop is currently loaded. Waiting for browser confirmation.",
                 summary: pendingLoadSummary(),
               },
               409,
             );
           }
 
-          applyWorkshopFromParsed(toLoad);
+          // Fresh server with a matching live sidecar — prompt user to resume or start fresh.
+          const isFreshServer =
+            currentSourcePath === null &&
+            workshop.slides.length === 0 &&
+            workshop.chat.length === 0 &&
+            workshop.status !== "finalized";
+
+          const liveFile = Bun.file(livePath);
+          if (isFreshServer && (await liveFile.exists())) {
+            try {
+              const liveText = await liveFile.text();
+              const liveParsed = yamlParse(liveText) as Record<string, unknown>;
+              if ((liveParsed.id as string) === sourceId) {
+                pendingResume = { sourcePath, sourceParsed, liveParsed, requestedAt: new Date().toISOString() };
+                broadcastState();
+                const liveSlides = (liveParsed.slides as unknown[]) || [];
+                const liveCommentCount = liveSlides.reduce((sum: number, s: any) => {
+                  return sum + ((s.tiles as unknown[]) || []).reduce((ss: number, t: any) => ss + ((t.comments as unknown[]) || []).length, 0);
+                }, 0);
+                return jsonResponse(
+                  {
+                    ok: false,
+                    pendingResume: true,
+                    summary: {
+                      sourcePath,
+                      sourceSummary: {
+                        id: sourceId,
+                        title: (sourceParsed.title as string) || "Untitled",
+                        slideCount: ((sourceParsed.slides as unknown[]) || []).length,
+                      },
+                      liveSummary: {
+                        id: liveParsed.id as string,
+                        title: (liveParsed.title as string) || "Untitled",
+                        slideCount: liveSlides.length,
+                        commentCount: liveCommentCount,
+                        chatCount: ((liveParsed.chat as unknown[]) || []).length,
+                      },
+                    },
+                  },
+                  409,
+                );
+              }
+            } catch (err) {
+              console.error("Failed to read live state, loading from source:", err);
+            }
+          }
+
+          applyWorkshopFromParsed(sourceParsed);
           currentSourcePath = sourcePath;
           pendingLoad = null;
           broadcastState();
-          return jsonResponse({ ok: true, id: workshop.id, restoredFromLive });
+          return jsonResponse({ ok: true, id: workshop.id, restoredFromLive: false });
         } catch (err: any) {
           return jsonResponse({ ok: false, error: err.message }, 500);
         }
@@ -1898,6 +2348,88 @@ const server = Bun.serve({
       pendingLoad = null;
       broadcastState();
       return jsonResponse({ ok: true });
+    }
+
+    // POST workshop/load/resume — Apply live sidecar state (user chose Resume in browser modal)
+    if (url.pathname === "/api/workshop/load/resume" && req.method === "POST") {
+      if (!pendingResume) {
+        return jsonResponse({ ok: false, error: "No pending resume" }, 400);
+      }
+      applyWorkshopFromParsed(pendingResume.liveParsed);
+      currentSourcePath = pendingResume.sourcePath;
+      pendingResume = null;
+      broadcastState();
+      return jsonResponse({ ok: true, id: workshop.id, restoredFromLive: true });
+    }
+
+    // POST workshop/load/fresh — Apply source state and delete live sidecar (user chose Start Fresh)
+    if (url.pathname === "/api/workshop/load/fresh" && req.method === "POST") {
+      if (!pendingResume) {
+        return jsonResponse({ ok: false, error: "No pending resume" }, 400);
+      }
+      const freshSourcePath = pendingResume.sourcePath;
+      const freshSourceParsed = pendingResume.sourceParsed;
+      applyWorkshopFromParsed(freshSourceParsed);
+      currentSourcePath = freshSourcePath;
+      const freshLivePath = livePathFor(freshSourcePath, workshop.id);
+      try {
+        if (existsSync(freshLivePath)) unlinkSync(freshLivePath);
+      } catch {
+        // best-effort
+      }
+      pendingResume = null;
+      broadcastState();
+      return jsonResponse({ ok: true, id: workshop.id, restoredFromLive: false });
+    }
+
+    // GET /api/workshops — List known live-state sessions
+    if (url.pathname === "/api/workshops" && req.method === "GET") {
+      try {
+        const liveDir = getLiveDir();
+        let files: string[] = [];
+        try {
+          files = readdirSync(liveDir).filter((f) => f.endsWith(".live.yaml"));
+        } catch (err: any) {
+          if (err.code === "ENOENT") return jsonResponse([]);
+          throw err;
+        }
+        const entries = files.map((filename) => {
+          const m = filename.match(/^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2})_(.+)_([^_]+)\.live\.yaml$/);
+          const livePath = `${liveDir}/${filename}`;
+          let lastModified: string | null = null;
+          try {
+            const st = statSync(livePath);
+            lastModified = st.mtime.toISOString();
+          } catch {
+            // ignore
+          }
+          let title: string | undefined;
+          try {
+            const text = readFileSync(livePath, "utf8");
+            const parsed = yamlParse(text) as Record<string, unknown>;
+            title = parsed.title as string | undefined;
+          } catch {
+            // best-effort
+          }
+          if (!m) return { livePath, lastModified, title };
+          return {
+            id: m[3],
+            slug: m[2],
+            timestamp: m[1],
+            lastModified,
+            livePath,
+            title,
+          };
+        });
+        entries.sort((a, b) => {
+          const am = a.lastModified ?? "";
+          const bm = b.lastModified ?? "";
+          return bm < am ? -1 : bm > am ? 1 : 0;
+        });
+        return jsonResponse(entries);
+      } catch (err: any) {
+        return jsonResponse({ ok: false, error: err.message }, 500);
+      }
     }
 
     // POST /api/slides — Push new slide
@@ -2165,28 +2697,40 @@ const server = Bun.serve({
       return jsonResponse({ ok: true });
     }
 
-    // POST /api/finalize — Write workshop YAML to disk
+    // POST /api/finalize — Write finalized workshop YAML to disk alongside the source file
     if (url.pathname === "/api/finalize" && req.method === "POST") {
       return (async () => {
+        if (!currentSourcePath) {
+          return jsonResponse({ ok: false, error: "no workshop loaded to finalize" }, 400);
+        }
+
         let body: any;
         try {
           body = await req.json();
         } catch {
           return jsonResponse({ ok: false, error: "Invalid JSON" }, 400);
         }
-        const outputDir = body.output_dir || "docs/workshops";
-        const slug = body.slug || "workshop";
-        const date = new Date().toISOString().slice(0, 10);
-        const filename = `${date}-${slug}.workshop.yaml`;
-        const dirPath = outputDir.startsWith("/") ? outputDir : `${process.cwd()}/${outputDir}`;
-        const filePath = `${dirPath}/${filename}`;
+
+        let timestamp: string;
+        let slug: string;
+        const parsed = parseSourceFilename(currentSourcePath);
+        if (parsed) {
+          timestamp = parsed.timestamp;
+          slug = parsed.slug;
+        } else {
+          console.warn(`finalize: could not parse source filename '${path.basename(currentSourcePath)}', using fallback`);
+          timestamp = new Date().toISOString().slice(0, 16).replace("T", "_").replace(":", "-");
+          slug = (body.slug as string) || workshop.id;
+        }
+
+        const { finalizedFilename, summaryFilename } = buildFinalizedFilenames(timestamp, slug);
+        const sourceDir = path.dirname(currentSourcePath);
+        const finalizedPath = `${sourceDir}/${finalizedFilename}`;
+        const summaryPath = `${sourceDir}/${summaryFilename}`;
 
         try {
-          // Ensure directory exists
-          const { mkdirSync } = await import("fs");
-          mkdirSync(dirPath, { recursive: true });
+          mkdirSync(sourceDir, { recursive: true });
 
-          // Serialize workshop to YAML
           const yamlContent = yamlSerialize({
             id: workshop.id,
             title: workshop.title,
@@ -2224,32 +2768,28 @@ const server = Bun.serve({
             })),
           });
 
-          await Bun.write(filePath, yamlContent);
+          await Bun.write(finalizedPath, yamlContent);
           workshop.status = "finalized";
 
-          // Remove the live sidecar — the finalized YAML is the source of truth now.
-          // Clear currentSourcePath and cancel any pending persist so the deletion isn't undone
-          // by a trailing debounced write from earlier mutations.
+          // Cancel pending persist and remove live sidecar.
           if (persistTimer) {
             clearTimeout(persistTimer);
             persistTimer = null;
           }
-          if (currentSourcePath) {
-            const livePath = livePathFor(currentSourcePath);
-            try {
-              const { unlinkSync, existsSync } = await import("fs");
-              if (existsSync(livePath)) unlinkSync(livePath);
-            } catch (err) {
-              console.error("Failed to remove live sidecar on finalize:", err);
-            }
-            currentSourcePath = null;
+          const livePath = livePathFor(currentSourcePath, workshop.id);
+          try {
+            if (existsSync(livePath)) unlinkSync(livePath);
+          } catch (err) {
+            console.error("Failed to remove live sidecar on finalize:", err);
           }
+          const finalizedSourcePath = currentSourcePath;
+          currentSourcePath = null;
 
-          // Auto-create inbox event
-          addInboxEvent("finalize-requested", { path: filePath, slug });
+          addInboxEvent("finalize-requested", { finalizedPath, summaryPath, sourcePath: finalizedSourcePath, slug, timestamp });
 
           broadcastState();
-          return jsonResponse({ ok: true, path: filePath });
+          beginShutdownGrace();
+          return jsonResponse({ ok: true, finalizedPath, summaryPath });
         } catch (err: any) {
           return jsonResponse({ ok: false, error: err.message }, 500);
         }

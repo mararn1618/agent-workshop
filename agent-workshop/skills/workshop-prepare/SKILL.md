@@ -180,19 +180,24 @@ chat: []
 
 ## Step 4: Write the File
 
-Write the YAML to:
+Resolve the project root and write the YAML to:
 
 ```
-docs/workshops/YYYY-MM-DD-<slug>.workshop.yaml
+<project-root>/docs/workshops/YYYY-MM-DD_HH-MM_<slug>.workshop.yaml
 ```
+
+The filename includes the current local time in `HH-MM` form so that multiple prepares on the same day don't collide. Example: `2026-04-18_17-08_auth-migration.workshop.yaml`.
 
 Where `<slug>` is a short kebab-case name derived from the workshop title (e.g., `auth-migration`, `api-redesign`, `feature-x-alignment`).
 
-Create the `docs/workshops/` directory if it does not exist:
+Create the output directory if it does not exist:
 
 ```bash
-mkdir -p docs/workshops
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+mkdir -p "$PROJECT_ROOT/docs/workshops"
 ```
+
+Write the file to `$PROJECT_ROOT/docs/workshops/YYYY-MM-DD_HH-MM_<slug>.workshop.yaml`.
 
 ## Step 5: Report and Hand Off
 
